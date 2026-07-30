@@ -1,0 +1,30 @@
+# Flask & Extensions
+Flask>=3.0.0
+Flask-CORS>=4.0.0
+Flask-SQLAlchemy>=3.1.0
+Flask-Migrate>=4.0.0
+
+# Database
+PyMySQL>=1.1.0
+cryptography>=42.0.0
+
+# Data & Finance
+yfinance>=0.2.50
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Machine Learning
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+
+# Technical Analysis
+ta>=0.11.0
+
+# NLP & Sentiment
+textblob>=0.18.0
+feedparser>=6.0.10
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+gunicorn>=21.0.0

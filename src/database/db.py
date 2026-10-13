@@ -255,9 +255,35 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS experiment_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    experiment TEXT NOT NULL,
+    experiment_id TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    feature_set TEXT NOT NULL,
+    best_model TEXT,
+    validation_mae REAL,
+    test_mae REAL,
+    test_rmse REAL,
+    directional_accuracy REAL,
+    sharpe_ratio REAL,
+    sortino_ratio REAL,
+    max_drawdown REAL,
+    strategy_return REAL,
+    relative_mae_improvement_pct REAL,
+    data_mode TEXT NOT NULL,
+    n_obs INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_price_bars_asset_tf ON price_bars(asset, timeframe);
 CREATE INDEX IF NOT EXISTS idx_raw_posts_asset ON raw_x_posts(asset);
 CREATE INDEX IF NOT EXISTS idx_processed_posts_asset ON processed_x_posts(asset);
 CREATE INDEX IF NOT EXISTS idx_news_asset ON news_articles(asset);
 CREATE INDEX IF NOT EXISTS idx_forecasts_asset ON forecasts(asset, timeframe);
+CREATE INDEX IF NOT EXISTS idx_exp_eval_run ON experiment_evaluations(run_id);
+CREATE INDEX IF NOT EXISTS idx_exp_eval_asset ON experiment_evaluations(asset, timeframe);
 """

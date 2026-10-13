@@ -37,7 +37,12 @@ from src.processing.data_cleaning import (
 from src.processing.sentiment import process_posts_sentiment, analyze_news_sentiment
 from src.processing.aggregation import aggregate_sentiment
 from src.processing.feature_engineering import build_features, create_targets, get_feature_columns
-from src.modeling.train import walk_forward_validate, train_final_model
+from src.ingestion.dataset_importer import (
+    import_historical_x_csv,
+    extract_huggingface_posts,
+    validate_date_coverage,
+)
+from src.modeling.train import walk_forward_validate, train_final_model, run_experiment_suite
 from src.modeling.forecasting import generate_forecasts
 from src.modeling.backtesting import run_backtest
 from src.modeling.metrics import calculate_all_metrics
@@ -83,6 +88,10 @@ if "data_source" not in st.session_state:
     st.session_state.data_source = ""
 if "ingestion_errors" not in st.session_state:
     st.session_state.ingestion_errors = {}
+if "experiment_comparison" not in st.session_state:
+    st.session_state.experiment_comparison = pd.DataFrame()
+if "coverage_diagnostics" not in st.session_state:
+    st.session_state.coverage_diagnostics = {}
 
 
 def get_data_mode() -> str:
@@ -174,6 +183,61 @@ with st.sidebar:
 
     if st.button("📄 Generate Reports", use_container_width=True):
         _run_reporting(selected_ticker, timeframe)
+
+    st.divider()
+    with st.expander("📁 Historical X Importer (CSV/HF)"):
+        st.caption("Import genuine historical X posts for fair empirical evaluation.")
+        uploaded_csv = st.file_uploader("Upload X Posts CSV", type=["csv"], key="sidebar_csv")
+        if uploaded_csv is not None:
+            if st.button("📥 Process Uploaded CSV", use_container_width=True):
+                raw_text = uploaded_csv.getvalue().decode("utf-8", errors="ignore")
+                posts = import_historical_x_csv(raw_text, asset=selected_ticker, source_label="csv_import")
+                if not posts.empty:
+                    posts, _ = deduplicate_posts(posts)
+                    posts = validate_timestamps(posts)
+                    posts = filter_empty_text(posts)
+                    proc = process_posts_sentiment(posts, use_transformer=False)
+                    agg = aggregate_sentiment(proc, timeframe, selected_ticker)
+                    repo.save_raw_posts(posts)
+                    repo.save_processed_posts(proc)
+                    if not agg.empty:
+                        repo.save_sentiment_aggregates(agg)
+                    st.session_state.posts_df = posts
+                    st.session_state.processed_posts = proc
+                    st.session_state.sentiment_agg = agg
+                    st.session_state.data_source = "csv_historical"
+                    st.session_state.demo_mode = False
+                    st.success(f"Imported {len(posts)} genuine posts from CSV!")
+                    st.rerun()
+
+        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
+        if hf_parquet.exists():
+            if st.button("📦 Load StephanAkkerman Dataset (MIT)", use_container_width=True):
+                with st.spinner("Extracting asset posts and aligning prices..."):
+                    posts = extract_huggingface_posts(hf_parquet, asset=selected_ticker, max_posts=5000)
+                    if not posts.empty:
+                        t_min = str(posts["timestamp_utc"].min())[:10]
+                        t_max = str(posts["timestamp_utc"].max())[:10]
+                        p_df = fetch_price_data(asset_config, timeframe, start_date=t_min, end_date=t_max)
+                        if not p_df.empty:
+                            p_df = normalize_price_data(p_df)
+                            repo.save_price_bars(p_df)
+                            st.session_state.price_df = p_df
+                        posts, _ = deduplicate_posts(posts)
+                        posts = validate_timestamps(posts)
+                        proc = process_posts_sentiment(posts, use_transformer=False)
+                        agg = aggregate_sentiment(proc, timeframe, selected_ticker)
+                        repo.save_raw_posts(posts)
+                        repo.save_processed_posts(proc)
+                        if not agg.empty:
+                            repo.save_sentiment_aggregates(agg)
+                        st.session_state.posts_df = posts
+                        st.session_state.processed_posts = proc
+                        st.session_state.sentiment_agg = agg
+                        st.session_state.data_source = "huggingface"
+                        st.session_state.demo_mode = False
+                        st.success(f"Loaded {len(posts)} genuine posts aligned with price history!")
+                        st.rerun()
 
 
 # ─── Helper Functions ────────────────────────────────────────────────────
@@ -315,31 +379,55 @@ def _run_demo(ticker, timeframe, days):
 
 
 def _run_training(ticker, timeframe, tc_bps):
-    """Run training and validation pipeline."""
+    """Run training and fair multi-variant experiment comparison suite."""
     price_df = st.session_state.price_df
     sentiment_agg = st.session_state.sentiment_agg
+    news_df = st.session_state.news_df
 
     if price_df.empty:
         st.error("No price data. Run ingestion or load demo data first.")
         return
 
     with st.spinner("Building features..."):
-        features = build_features(price_df, sentiment_agg, timeframe)
+        features = build_features(price_df, sentiment_agg, timeframe, news_df=news_df)
         features = create_targets(features, horizons=[0, 1, 2, 3, 4, 5])
         st.session_state.features_df = features
 
-    # Validate for horizon 1 (primary)
-    with st.spinner("Running walk-forward validation..."):
-        results = walk_forward_validate(features, horizon=1, n_folds=5)
+    has_real_sentiment = not sentiment_agg.empty and not st.session_state.get("demo_mode", False)
+    has_eng = bool(has_real_sentiment and "engagement_weighted_sentiment" in sentiment_agg.columns and sentiment_agg["engagement_weighted_sentiment"].notna().any())
+    has_nws = bool(not news_df.empty and "news_mean_sentiment" in features.columns and features["news_mean_sentiment"].notna().any())
 
-        if "error" in results:
-            st.error(f"Validation error: {results['error']} ({results.get('n_obs', 0)} observations)")
-            return
+    # Run multi-variant experiment comparison suite (horizons 1..5)
+    with st.spinner("Executing fair model comparison suite across horizons 1..5..."):
+        exp_suite = run_experiment_suite(
+            features,
+            horizons=[1, 2, 3, 4, 5],
+            n_folds=3,
+            test_ratio=0.2,
+            asset=ticker,
+            timeframe=timeframe,
+            transaction_cost_bps=tc_bps,
+            has_real_sentiment=has_real_sentiment,
+            has_engagement=has_eng,
+            has_news=has_nws,
+        )
+        st.session_state.experiment_comparison = exp_suite["comparison_df"]
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        if not exp_suite["comparison_df"].empty:
+            repo.save_experiment_evaluations(exp_suite["comparison_df"], run_id=run_id)
 
-        st.session_state.validation_results = results
+    # Primary model results (horizon 1)
+    h1_results = exp_suite["horizon_results"].get(1, {})
+    results = h1_results.get("res_c") or walk_forward_validate(features, horizon=1, n_folds=3)
 
-    # Run backtest
-    with st.spinner("Running backtest..."):
+    if "error" in results:
+        st.error(f"Validation error: {results['error']} ({results.get('n_obs', 0)} observations)")
+        return
+
+    st.session_state.validation_results = results
+
+    # Run primary strategy backtest
+    with st.spinner("Running primary strategy backtest..."):
         if results.get("y_test") is not None and len(results["y_test"]) > 5:
             backtest = run_backtest(
                 predictions=results["y_test_pred"],
@@ -355,7 +443,7 @@ def _run_training(ticker, timeframe, tc_bps):
         else:
             st.warning("Insufficient test data for backtest")
 
-    st.success(f"Training complete. Best model: {results.get('best_model', 'N/A')}")
+    st.success(f"Training & Experiment Suite complete. Best model: {results.get('best_model', 'N/A')}")
     st.rerun()
 
 
@@ -674,7 +762,7 @@ with tab2:
 # TAB 3: Forecast Matrix
 # ═══════════════════════════════════════════════════════════════════════
 with tab3:
-    st.header("Forecast Matrix")
+    st.header("Forecast Matrix (n+0 through n+5)")
     forecasts = st.session_state.forecasts
 
     if not forecasts:
@@ -683,14 +771,20 @@ with tab3:
         # Forecast table
         fc_data = []
         for f in forecasts:
+            h = f.get("horizon", 0)
+            h_lbl = "n+0 (Observed Reference)" if h == 0 else f"n+{h}"
+            p_price = f.get("predicted_price")
+            r_price = f.get("reference_price")
+            p_ret = f.get("predicted_return")
             fc_data.append({
-                "Horizon": f"n+{f['horizon']}",
+                "Horizon": h_lbl,
                 "Target Timestamp": f.get("target_timestamp", ""),
-                "Reference Price": f.get("reference_price"),
-                "Predicted Price": f.get("predicted_price"),
-                "Predicted Return": f.get("predicted_return"),
-                "Model": f.get("model_name", ""),
-                "Status": f.get("status", ""),
+                "Reference Price": f"${r_price:,.2f}" if r_price is not None else "N/A",
+                "Predicted Price": f"${p_price:,.2f}" if p_price is not None else "N/A",
+                "Predicted Return": f"{p_ret:+.4f}" if p_ret is not None else "N/A",
+                "Model Name": f.get("model_name", "N/A"),
+                "Data Mode": f.get("data_mode", "live").upper(),
+                "Status": f.get("status", "N/A"),
             })
 
         fc_df = pd.DataFrame(fc_data)
@@ -700,98 +794,200 @@ with tab3:
         valid_fc = [f for f in forecasts if f.get("predicted_price") is not None]
         if valid_fc:
             fig = go.Figure()
-            horizons = [f["horizon"] for f in valid_fc]
+            horizons = [f"n+{f['horizon']}" for f in valid_fc]
             prices = [f["predicted_price"] for f in valid_fc]
             ref_price = valid_fc[0].get("reference_price", prices[0])
 
             fig.add_trace(go.Scatter(
                 x=horizons, y=prices,
-                mode="lines+markers",
+                mode="lines+markers+text",
+                text=[f"${p:,.2f}" for p in prices],
+                textposition="top center",
                 name="Predicted Price",
                 line=dict(color="#2196F3", width=3),
                 marker=dict(size=10),
             ))
             fig.add_hline(
                 y=ref_price, line_dash="dash",
-                line_color="gray", annotation_text="Reference Price",
+                line_color="gray", annotation_text="Reference Price (n+0)",
             )
             fig.update_layout(
-                title="Predicted Price Trajectory",
-                xaxis_title="Horizon (periods ahead)",
+                title=f"{selected_ticker} Multi-Horizon Forecast Trajectory (n+0 to n+5)",
+                xaxis_title="Forecast Horizon",
                 yaxis_title="Price",
                 template="plotly_white",
-                height=400,
+                height=420,
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        st.caption("Note: Prediction intervals are not displayed as they cannot be "
-                   "statistically validated with the current methodology.")
+        st.caption("Note: n+0 reflects the observed current bar close / reference price nowcast. Horizons n+1 through n+5 are forward direct models.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TAB 4: Model Evaluation
+# TAB 4: Model Evaluation & Experiment Comparison
 # ═══════════════════════════════════════════════════════════════════════
 with tab4:
-    st.header("Model Evaluation")
+    st.header("Model Evaluation & Experiment Comparison Suite")
+
+    # Section 1: Multi-Variant Experiment Comparison (Priority 7)
+    st.subheader("🔬 Fair Multi-Variant Experiment Comparison")
+    st.markdown(
+        """This experiment framework compares predictive models evaluated on **strictly identical chronological test partitions** with zero target leakage:
+- **Experiment A (Naive Baseline)**: $\\hat{r} = 0$ (random walk)
+- **Experiment B (Price-Only)**: Historical price-derived features only
+- **Experiment C (Primary: Price + X)**: Price features + point-in-time X sentiment
+- **Experiment D (Engagement-Enhanced)**: Price + X + engagement-weighted sentiment (if available)
+- **Experiment E (News-Enhanced)**: Price + X + news sentiment (experimental)
+"""
+    )
+
+    # Load experiment comparisons from session state or SQLite
+    comp_df = st.session_state.get("experiment_comparison", pd.DataFrame())
+    if comp_df.empty:
+        comp_df = repo.get_experiment_evaluations(asset=selected_ticker)
+
+    if comp_df.empty:
+        st.info("No experiment comparison results recorded yet. Click **Train & Validate** in the sidebar to execute the suite.")
+    else:
+        # Check if real sentiment was available
+        has_real_sent = bool(
+            not st.session_state.sentiment_agg.empty and not st.session_state.get("demo_mode", False)
+        )
+        if not has_real_sent:
+            st.warning("⚠️ **Notice**: Dataset contains no real X observations (or Apify quota was restricted). Experiment C operates with missing-sentiment flags (`sentiment_missing = 1`). To observe genuine sentiment power, load the StephanAkkerman historical dataset from the sidebar.")
+
+        # Filters
+        c_filter1, c_filter2, c_filter3 = st.columns(3)
+        with c_filter1:
+            all_exps = ["All"] + sorted(list(comp_df["experiment"].unique()))
+            selected_exp = st.selectbox("Filter Experiment", all_exps)
+        with c_filter2:
+            all_horizons = ["All"] + [f"n+{h}" for h in sorted(comp_df["horizon"].unique())]
+            selected_h = st.selectbox("Filter Horizon", all_horizons)
+        with c_filter3:
+            all_runs = ["Latest / All"] + sorted(list(comp_df["run_id"].unique()), reverse=True) if "run_id" in comp_df.columns else ["Latest / All"]
+            selected_run = st.selectbox("Filter Run ID", all_runs)
+
+        # Apply filters
+        filtered_comp = comp_df.copy()
+        if selected_exp != "All":
+            filtered_comp = filtered_comp[filtered_comp["experiment"] == selected_exp]
+        if selected_h != "All":
+            h_int = int(selected_h.replace("n+", ""))
+            filtered_comp = filtered_comp[filtered_comp["horizon"] == h_int]
+        if selected_run != "Latest / All" and "run_id" in filtered_comp.columns:
+            filtered_comp = filtered_comp[filtered_comp["run_id"] == selected_run]
+
+        # Display table
+        display_cols = [
+            "experiment", "horizon", "best_model", "validation_mae", "test_mae",
+            "test_rmse", "directional_accuracy", "sharpe_ratio", "sortino_ratio",
+            "max_drawdown", "relative_mae_improvement_pct"
+        ]
+        available_disp = [c for c in display_cols if c in filtered_comp.columns]
+        table_view = filtered_comp[available_disp].copy()
+
+        # Rename for clean presentation
+        rename_map = {
+            "experiment": "Experiment",
+            "horizon": "Horizon (n+h)",
+            "best_model": "Model",
+            "validation_mae": "Val MAE",
+            "test_mae": "Test MAE",
+            "test_rmse": "Test RMSE",
+            "directional_accuracy": "Dir. Acc (%)",
+            "sharpe_ratio": "Sharpe",
+            "sortino_ratio": "Sortino",
+            "max_drawdown": "Max DD",
+            "relative_mae_improvement_pct": "Rel. MAE Imprv (%)",
+        }
+        table_view = table_view.rename(columns=rename_map)
+        st.dataframe(table_view, use_container_width=True, hide_index=True)
+
+        # Visualizations across horizons
+        h_df = comp_df[comp_df["experiment_id"].isin(["exp_b_price_only", "exp_c_primary"])].copy()
+        if not h_df.empty and len(h_df["horizon"].unique()) > 1:
+            col_chart1, col_chart2 = st.columns(2)
+            with col_chart1:
+                fig_mae = px.bar(
+                    h_df,
+                    x="horizon",
+                    y="test_mae",
+                    color="experiment",
+                    barmode="group",
+                    title="Test MAE by Horizon: Price-Only vs Price + X Sentiment",
+                    labels={"horizon": "Horizon (n+h)", "test_mae": "Out-of-Sample MAE"},
+                    color_discrete_map={
+                        "Experiment B (Price-Only)": "#9E9E9E",
+                        "Experiment C (Primary: Price + X)": "#2196F3",
+                    },
+                )
+                fig_mae.update_layout(template="plotly_white", height=380)
+                st.plotly_chart(fig_mae, use_container_width=True)
+
+            with col_chart2:
+                c_primary = comp_df[comp_df["experiment_id"] == "exp_c_primary"].copy()
+                if not c_primary.empty:
+                    fig_imp = go.Figure()
+                    fig_imp.add_trace(go.Bar(
+                        x=[f"n+{h}" for h in c_primary["horizon"]],
+                        y=c_primary["relative_mae_improvement_pct"],
+                        marker_color=["#4CAF50" if v >= 0 else "#F44336" for v in c_primary["relative_mae_improvement_pct"]],
+                        name="Relative MAE Imprv",
+                        text=[f"{v:+.2f}%" for v in c_primary["relative_mae_improvement_pct"]],
+                        textposition="outside",
+                    ))
+                    fig_imp.add_hline(y=0.0, line_dash="dash", line_color="gray")
+                    fig_imp.update_layout(
+                        title="Relative MAE Improvement from Sentiment (%)",
+                        xaxis_title="Horizon",
+                        yaxis_title="Improvement vs Price-Only (%)",
+                        template="plotly_white",
+                        height=380,
+                    )
+                    st.plotly_chart(fig_imp, use_container_width=True)
+
+    st.divider()
+
+    # Section 2: Walk-Forward Validation & Scatter (Primary Model)
+    st.subheader("🔍 Primary Walk-Forward Validation Diagnostics")
     vr = st.session_state.validation_results
 
     if not vr or "validation_metrics" not in vr:
-        st.info("No validation results. Run **Train & Validate** first.")
+        st.info("No primary validation diagnostics available.")
     else:
-        st.subheader(f"Best Model: {vr.get('best_model', 'N/A')}")
-        st.caption(f"Training: {vr.get('n_train', 0)} obs | Test: {vr.get('n_test', 0)} obs")
-
-        # Validation metrics table
+        st.caption(f"Selected: **{vr.get('best_model', 'N/A')}** | Dev observations: {vr.get('n_train', 0)} | Test: {vr.get('n_test', 0)} | Purge gap: {vr.get('gap', 2)}")
         vm = vr.get("validation_metrics", {})
         if vm:
-            st.subheader("Walk-Forward Validation (avg across folds)")
             vm_rows = []
             for model_name, metrics in vm.items():
                 row = {"Model": model_name}
-                row.update({k: f"{v:.6f}" if isinstance(v, float) and k != "n_folds" else v
-                           for k, v in metrics.items()})
+                row.update({k: f"{v:.6f}" if isinstance(v, float) and k != "n_folds" else v for k, v in metrics.items()})
                 vm_rows.append(row)
             st.dataframe(pd.DataFrame(vm_rows), use_container_width=True, hide_index=True)
 
-        # Test metrics
-        tm = vr.get("test_metrics", {})
-        nm = vr.get("naive_test_metrics", {})
-        if tm:
-            st.subheader("Final Test Set")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("MAE", f"{tm.get('mae', 0):.6f}",
-                          f"vs Naive: {nm.get('mae', 0):.6f}" if nm else "")
-            with col2:
-                st.metric("RMSE", f"{tm.get('rmse', 0):.6f}")
-            with col3:
-                st.metric("Dir. Accuracy", f"{tm.get('directional_accuracy', 0):.1f}%")
-            with col4:
-                st.metric("R²", f"{tm.get('r_squared', 0):.4f}")
-
-        # Actual vs predicted scatter
         y_test = vr.get("y_test")
         y_pred = vr.get("y_test_pred")
         if y_test is not None and y_pred is not None:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
+            fig_scat = go.Figure()
+            fig_scat.add_trace(go.Scatter(
                 x=y_test, y=y_pred, mode="markers",
                 name="Predictions", marker=dict(color="#2196F3", size=6, opacity=0.6),
             ))
-            min_val = min(y_test.min(), y_pred.min())
-            max_val = max(y_test.max(), y_pred.max())
-            fig.add_trace(go.Scatter(
+            min_val = min(float(np.min(y_test)), float(np.min(y_pred)))
+            max_val = max(float(np.max(y_test)), float(np.max(y_pred)))
+            fig_scat.add_trace(go.Scatter(
                 x=[min_val, max_val], y=[min_val, max_val],
                 mode="lines", name="Perfect",
                 line=dict(color="gray", dash="dash"),
             ))
-            fig.update_layout(
-                title="Actual vs Predicted Returns (Test Set)",
-                xaxis_title="Actual Return",
+            fig_scat.update_layout(
+                title="Actual vs Predicted Returns (Primary Model Test Set)",
+                xaxis_title="Actual Realized Return",
                 yaxis_title="Predicted Return",
-                template="plotly_white", height=400,
+                template="plotly_white", height=380,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig_scat, use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════

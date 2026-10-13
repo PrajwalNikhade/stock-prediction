@@ -525,3 +525,74 @@ class Repository:
             return cursor.lastrowid
         finally:
             conn.close()
+
+    # --- Experiment Evaluations ---
+    def save_experiment_evaluations(self, df: pd.DataFrame, run_id: str) -> int:
+        """Persist structured multi-variant experiment evaluations."""
+        if df is None or df.empty:
+            return 0
+        conn = self._conn()
+        count = 0
+        try:
+            for _, row in df.iterrows():
+                conn.execute(
+                    """INSERT INTO experiment_evaluations
+                       (run_id, experiment, experiment_id, asset, timeframe, horizon,
+                        feature_set, best_model, validation_mae, test_mae, test_rmse,
+                        directional_accuracy, sharpe_ratio, sortino_ratio, max_drawdown,
+                        strategy_return, relative_mae_improvement_pct, data_mode, n_obs)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        run_id,
+                        row.get("experiment"),
+                        row.get("experiment_id"),
+                        row.get("asset"),
+                        row.get("timeframe"),
+                        int(row.get("horizon")),
+                        row.get("feature_set"),
+                        row.get("best_model"),
+                        float(row.get("validation_mae")) if pd.notna(row.get("validation_mae")) else None,
+                        float(row.get("test_mae")) if pd.notna(row.get("test_mae")) else None,
+                        float(row.get("test_rmse")) if pd.notna(row.get("test_rmse")) else None,
+                        float(row.get("directional_accuracy")) if pd.notna(row.get("directional_accuracy")) else None,
+                        float(row.get("sharpe_ratio")) if pd.notna(row.get("sharpe_ratio")) else None,
+                        float(row.get("sortino_ratio")) if pd.notna(row.get("sortino_ratio")) else None,
+                        float(row.get("max_drawdown")) if pd.notna(row.get("max_drawdown")) else None,
+                        float(row.get("strategy_return")) if pd.notna(row.get("strategy_return")) else None,
+                        float(row.get("relative_mae_improvement_pct")) if pd.notna(row.get("relative_mae_improvement_pct")) else None,
+                        row.get("data_mode", "live"),
+                        int(row.get("n_obs")) if pd.notna(row.get("n_obs")) else None,
+                    ),
+                )
+                count += 1
+            conn.commit()
+        finally:
+            conn.close()
+        return count
+
+    def get_experiment_evaluations(self, asset: str = None, run_id: str = None) -> pd.DataFrame:
+        """Retrieve stored multi-variant experiment evaluation comparisons."""
+        conn = self._conn()
+        try:
+            if run_id and asset:
+                return pd.read_sql_query(
+                    "SELECT * FROM experiment_evaluations WHERE run_id=? AND asset=? ORDER BY horizon, experiment_id",
+                    conn, params=(run_id, asset),
+                )
+            elif run_id:
+                return pd.read_sql_query(
+                    "SELECT * FROM experiment_evaluations WHERE run_id=? ORDER BY horizon, experiment_id",
+                    conn, params=(run_id,),
+                )
+            elif asset:
+                return pd.read_sql_query(
+                    "SELECT * FROM experiment_evaluations WHERE asset=? ORDER BY created_at DESC, horizon, experiment_id",
+                    conn, params=(asset,),
+                )
+            return pd.read_sql_query(
+                "SELECT * FROM experiment_evaluations ORDER BY created_at DESC, horizon, experiment_id",
+                conn,
+            )
+        finally:
+            conn.close()
+

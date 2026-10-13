@@ -1,8 +1,10 @@
 """CLI script to run CrowdWisdomTrading pipeline and generate reports.
 
 Supports:
-- Live mode (default): Uses real market prices from Binance/Yahoo, real Apify posts if configured, real news from Tavily/Exa.
-  If Apify is unconfigured or authentication fails, processes in PARTIAL DATA mode without silently fabricating fake posts.
+- Live mode (default): Uses real market prices from Binance/Yahoo, checks Apify Actor for live posts, retrieves news from Tavily/Exa.
+  If Apify exceeds its monthly usage limit, enters PARTIAL DATA mode with explicit missing-sentiment flags without fabricating data.
+- Historical X mode (--use-historical-x or --csv-posts): Imports genuine historical X posts (e.g. from StephanAkkerman/financial-tweets or user CSV)
+  and aligns prices to the exact historical period for rigorous empirical validation.
 - Explicit Demo mode (--demo): Generates labeled synthetic fixtures.
 """
 
@@ -28,6 +30,11 @@ from src.ingestion.apify_client import (
     verify_credentials as verify_apify,
     test_apify_connection,
 )
+from src.ingestion.dataset_importer import (
+    import_historical_x_csv,
+    extract_huggingface_posts,
+    validate_date_coverage,
+)
 from src.ingestion.tavily_client import is_available as tavily_available, search_news as tavily_search
 from src.ingestion.exa_client import is_available as exa_available, search_news as exa_search
 from src.utils.demo_data import generate_demo_prices, generate_demo_posts, generate_demo_news
@@ -35,7 +42,7 @@ from src.processing.data_cleaning import deduplicate_posts, validate_timestamps,
 from src.processing.sentiment import process_posts_sentiment, analyze_news_sentiment
 from src.processing.aggregation import aggregate_sentiment
 from src.processing.feature_engineering import build_features, create_targets, get_feature_columns
-from src.modeling.train import walk_forward_validate, train_final_model
+from src.modeling.train import walk_forward_validate, train_final_model, run_experiment_suite
 from src.modeling.forecasting import generate_forecasts
 from src.modeling.backtesting import run_backtest
 from src.reporting.sentiment_report import generate_sentiment_outlook
@@ -49,39 +56,76 @@ def run_pipeline(
     timeframe: str = "1d",
     days: int = 180,
     use_demo: bool = False,
+    csv_posts: str = None,
+    use_historical_x: bool = False,
     run_id: str = None,
 ):
-    """Execute the end-to-end forecasting pipeline with provenance and audit tracking."""
+    """Execute the end-to-end forecasting pipeline with provenance, fair comparison, and audit tracking."""
     run_id = run_id or f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     logger.info("Starting experiment %s for %s (%s)...", run_id, ticker, timeframe)
 
-    logger.info("Initializing database: %s", DATABASE_PATH)
     init_db(DATABASE_PATH)
     repo = Repository(DATABASE_PATH)
 
     asset_cfg = get_asset_by_ticker(ticker) or {
         "ticker": ticker,
         "name": ticker,
-        "asset_class": "crypto",
-        "provider": "binance",
-        "search_terms": [ticker, "Bitcoin", "#BTC"],
+        "asset_class": "crypto" if "BTC" in ticker or "USDT" in ticker else "us_equities",
+        "provider": "binance" if "BTC" in ticker else "yfinance",
+        "search_terms": [ticker],
     }
-    data_mode = "demo" if use_demo else "live"
 
     price_df = pd.DataFrame()
     posts_df = pd.DataFrame()
     news_df = pd.DataFrame()
+    post_source = "apify"
     apify_status_msg = "Not attempted"
+    coverage_diagnostics = {}
 
     if use_demo:
         logger.info("EXPLICIT DEMO MODE: Generating labeled synthetic data...")
-        price_df = generate_demo_prices(ticker, timeframe, n_bars=days, base_price=65000.0)
+        data_mode = "demo"
+        price_df = generate_demo_prices(ticker, timeframe, n_bars=days, base_price=65000.0 if "BTC" in ticker else 120.0)
         posts_df = generate_demo_posts(ticker, n_posts=150)
         news_df = generate_demo_news(ticker, n_articles=10)
         price_source = "demo"
+        post_source = "demo"
         apify_status_msg = "Demo synthetic fixtures"
+
+    elif csv_posts:
+        logger.info("HISTORICAL CSV MODE: Importing X posts from %s...", csv_posts)
+        posts_df = import_historical_x_csv(csv_posts, asset=ticker, source_label="csv_import")
+        post_source = "csv_import"
+        apify_status_msg = f"Imported CSV ({len(posts_df)} posts)"
+
+        # Fetch matching price history if possible or standard lookback
+        price_df = fetch_price_data(asset_cfg, timeframe, days=days)
+        price_source = price_df["source"].iloc[0] if "source" in price_df.columns else "binance"
+
+    elif use_historical_x:
+        logger.info("HISTORICAL X DATASET MODE: Using StephanAkkerman/financial-tweets (MIT)...")
+        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
+        if hf_parquet.exists():
+            posts_df = extract_huggingface_posts(hf_parquet, asset=ticker, max_posts=5000)
+            post_source = "huggingface_stephanakkerman"
+            apify_status_msg = f"HuggingFace dataset ({len(posts_df)} posts)"
+        else:
+            logger.warning("Local parquet %s not found. Falling back to live mode.", hf_parquet)
+            posts_df = pd.DataFrame()
+
+        # Align prices to the historical dataset date window (Nov 2023 - May 2024)
+        if not posts_df.empty:
+            t_min = str(posts_df["timestamp_utc"].min())[:10]
+            t_max = str(posts_df["timestamp_utc"].max())[:10]
+            logger.info("Fetching price data aligned to historical posts: %s to %s...", t_min, t_max)
+            price_df = fetch_price_data(asset_cfg, timeframe, start_date=t_min, end_date=t_max)
+        else:
+            price_df = fetch_price_data(asset_cfg, timeframe, days=days)
+
+        price_source = price_df["source"].iloc[0] if "source" in price_df.columns else "binance"
+
     else:
-        # 1. Fetch real price data
+        # Standard Live Mode: Fetch market prices
         logger.info("LIVE MODE: Fetching real market price data for %s (%s, lookback %d days)...", ticker, timeframe, days)
         try:
             price_df = fetch_price_data(asset_cfg, timeframe, days=days)
@@ -89,91 +133,41 @@ def run_pipeline(
             logger.error("Price fetch error: %s", e)
 
         if price_df.empty:
-            logger.error("Could not retrieve live price data for %s from Binance.", ticker)
+            logger.error("Could not retrieve live price data for %s.", ticker)
             print("ERROR: Could not retrieve live prices. Pass --demo to explicitly use demo fixtures.")
-            return
+            return None
 
         price_source = price_df["source"].iloc[0] if "source" in price_df.columns else "binance"
         logger.info("Successfully fetched %d price bars from %s (%s to %s)",
                     len(price_df), price_source, price_df["timestamp_utc"].min(), price_df["timestamp_utc"].max())
 
-        # Log price ingestion
-        repo.log_ingestion_run({
-            "asset": ticker,
-            "provider": price_source,
-            "run_type": "prices",
-            "requested_start": (utc_now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "requested_end": format_utc(utc_now()),
-            "actual_start": str(price_df["timestamp_utc"].min()),
-            "actual_end": str(price_df["timestamp_utc"].max()),
-            "record_count": len(price_df),
-            "status": "success",
-            "error_message": None,
-        })
-
-        # 2. Collect X posts via Apify (small test run first as required)
-        logger.info("Testing Apify Actor connection with a small sample test run...")
+        # Collect live X posts via Apify (small test run first)
+        logger.info("Testing Apify Actor availability with a small sample test run...")
         search_terms = asset_cfg.get("search_terms", [ticker])
         test_query = asset_cfg.get("name") or (search_terms[0] if search_terms else ticker)
         test_run = test_apify_connection(query=test_query, max_items=2)
 
         if test_run["success"]:
-            logger.info("Apify test run successful (%d items). Proceeding to collect live posts...", test_run["items_retrieved"])
-            # Query top relevant terms for the asset to retrieve live posts
+            logger.info("Apify test run successful (%d items). Collecting live posts...", test_run["items_retrieved"])
             selected_terms = [t for t in search_terms if len(t) > 2][:3] or [test_query]
             posts_df = collect_posts(ticker, selected_terms, max_items=50)
             apify_status_msg = f"Live retrieved ({len(posts_df)} posts)"
-            repo.log_ingestion_run({
-                "asset": ticker,
-                "provider": "apify",
-                "run_type": "x_posts",
-                "requested_start": None,
-                "requested_end": None,
-                "actual_start": str(posts_df["timestamp_utc"].min()) if not posts_df.empty else None,
-                "actual_end": str(posts_df["timestamp_utc"].max()) if not posts_df.empty else None,
-                "record_count": len(posts_df),
-                "status": "success",
-                "error_message": None,
-            })
+            post_source = "apify"
         else:
             apify_err = test_run.get("error", "Unknown error")
-            apify_status_msg = f"Failed ({apify_err})"
-            logger.warning("Apify test run failed: %s", apify_err)
+            apify_status_msg = f"Quota/Access restriction: {apify_err}"
+            logger.warning("Apify Actor test failed: %s", apify_err)
             logger.info("Operating in PARTIAL DATA mode without fabricating synthetic posts.")
             posts_df = pd.DataFrame()
-            repo.log_ingestion_run({
-                "asset": ticker,
-                "provider": "apify",
-                "run_type": "x_posts",
-                "requested_start": None,
-                "requested_end": None,
-                "actual_start": None,
-                "actual_end": None,
-                "record_count": 0,
-                "status": "failed",
-                "error_message": apify_err,
-            })
+            post_source = "none (quota exceeded)"
 
-        # 3. Collect News via Tavily and Exa
+        # Collect News via Tavily and Exa
         news_articles = []
         if tavily_available():
             try:
                 tdf = tavily_search(ticker, search_terms, max_results=10)
                 if not tdf.empty:
                     news_articles.append(tdf)
-                    logger.info("Tavily retrieved %d live news articles", len(tdf))
-                    repo.log_ingestion_run({
-                        "asset": ticker,
-                        "provider": "tavily",
-                        "run_type": "news",
-                        "requested_start": None,
-                        "requested_end": None,
-                        "actual_start": str(tdf["published_at"].min()) if "published_at" in tdf.columns else None,
-                        "actual_end": str(tdf["published_at"].max()) if "published_at" in tdf.columns else None,
-                        "record_count": len(tdf),
-                        "status": "success",
-                        "error_message": None,
-                    })
             except Exception as e:
                 logger.warning("Tavily news error: %s", e)
 
@@ -182,19 +176,6 @@ def run_pipeline(
                 edf = exa_search(ticker, search_terms, max_results=10)
                 if not edf.empty:
                     news_articles.append(edf)
-                    logger.info("Exa retrieved %d live news articles", len(edf))
-                    repo.log_ingestion_run({
-                        "asset": ticker,
-                        "provider": "exa",
-                        "run_type": "news",
-                        "requested_start": None,
-                        "requested_end": None,
-                        "actual_start": str(edf["published_at"].min()) if "published_at" in edf.columns else None,
-                        "actual_end": str(edf["published_at"].max()) if "published_at" in edf.columns else None,
-                        "record_count": len(edf),
-                        "status": "success",
-                        "error_message": None,
-                    })
             except Exception as e:
                 logger.warning("Exa news error: %s", e)
 
@@ -206,15 +187,22 @@ def run_pipeline(
                 news_df.at[idx, "sentiment_score"] = score
                 news_df.at[idx, "sentiment_label"] = label
 
-        # Determine overall mode
-        if not posts_df.empty and not price_df.empty:
-            data_mode = "live"
-        elif not price_df.empty:
-            data_mode = "partial"
-        else:
-            data_mode = "none"
+    # Validate temporal coverage and date overlap
+    coverage_diagnostics = validate_date_coverage(price_df, posts_df)
+    if coverage_diagnostics.get("warning"):
+        logger.warning("Coverage check: %s", coverage_diagnostics["warning"])
 
-    # Save prices to SQLite
+    # Determine overall data mode
+    if use_demo:
+        data_mode = "demo"
+    elif not posts_df.empty and not price_df.empty and coverage_diagnostics.get("has_adequate_overlap", False):
+        data_mode = "live"
+    elif not price_df.empty:
+        data_mode = "partial"
+    else:
+        data_mode = "none"
+
+    # Persist price bars to SQLite
     repo.save_price_bars(price_df)
 
     # Process and save posts if present
@@ -234,82 +222,69 @@ def run_pipeline(
     if not news_df.empty:
         repo.save_news(news_df)
 
-    # Feature engineering (preserves missing-sentiment flags without synthetic leakage)
+    # Feature engineering
     logger.info("Building features (data mode: %s)...", data_mode)
-    features_df = build_features(price_df, sentiment_agg, timeframe)
+    features_df = build_features(price_df, sentiment_agg, timeframe, news_df=news_df)
     features_df = create_targets(features_df, horizons=[1, 2, 3, 4, 5])
     repo.save_engineered_features(features_df, ticker, timeframe, run_id=run_id)
 
-    # Walk-forward validation
-    logger.info("Running expanding-window walk-forward validation (folds=3, gap=horizon+1)...")
-    val_results = walk_forward_validate(features_df, horizon=1, n_folds=3)
+    # Run multi-variant experiment comparison suite across all horizons (Priority 2)
+    has_real_sentiment = not sentiment_agg.empty and coverage_diagnostics.get("has_adequate_overlap", False)
+    has_eng = bool(has_real_sentiment and "engagement_weighted_sentiment" in sentiment_agg.columns and sentiment_agg["engagement_weighted_sentiment"].notna().any())
+    has_nws = bool(not news_df.empty and "news_mean_sentiment" in features_df.columns and features_df["news_mean_sentiment"].notna().any())
 
-    # Persist validation metrics with run_id
-    val_records = []
+    logger.info("Executing fair model comparison suite across horizons 1..5...")
+    exp_suite = run_experiment_suite(
+        features_df,
+        horizons=[1, 2, 3, 4, 5],
+        n_folds=3,
+        test_ratio=0.2,
+        asset=ticker,
+        timeframe=timeframe,
+        transaction_cost_bps=10.0,
+        has_real_sentiment=has_real_sentiment,
+        has_engagement=has_eng,
+        has_news=has_nws,
+    )
+    comparison_df = exp_suite["comparison_df"]
+    if not comparison_df.empty:
+        repo.save_experiment_evaluations(comparison_df, run_id=run_id)
+
+    # Extract primary model results for horizon 1
+    h1_results = exp_suite["horizon_results"].get(1, {})
+    val_results = h1_results.get("res_c") or walk_forward_validate(features_df, horizon=1, n_folds=3)
     best_model_name = val_results.get("best_model", "Ridge")
-    for m_name, m_dict in val_results.get("validation_metrics", {}).items():
-        for k, v in m_dict.items():
-            if isinstance(v, (int, float)) and not np.isnan(v):
-                val_records.append({
-                    "asset": ticker,
-                    "timeframe": timeframe,
-                    "model_name": m_name,
-                    "horizon": 1,
-                    "fold": 0,
-                    "metric_name": k,
-                    "metric_value": float(v),
-                    "dataset_type": "val_avg",
-                    "run_id": run_id,
-                })
-    for k, v in val_results.get("test_metrics", {}).items():
-        if isinstance(v, (int, float)) and not np.isnan(v):
-            val_records.append({
-                "asset": ticker,
-                "timeframe": timeframe,
-                "model_name": best_model_name,
-                "horizon": 1,
-                "fold": -1,
-                "metric_name": k,
-                "metric_value": float(v),
-                "dataset_type": "test",
-                "run_id": run_id,
-            })
-    for k, v in val_results.get("naive_test_metrics", {}).items():
-        if isinstance(v, (int, float)) and not np.isnan(v):
-            val_records.append({
-                "asset": ticker,
-                "timeframe": timeframe,
-                "model_name": "Naive",
-                "horizon": 1,
-                "fold": -1,
-                "metric_name": k,
-                "metric_value": float(v),
-                "dataset_type": "test_naive",
-                "run_id": run_id,
-            })
-    if val_records:
-        repo.save_validation_results(val_records, run_id=run_id)
 
-    # Train direct models for multi-horizon forecast matrix
-    feature_cols = get_feature_columns()
+    # Train direct production models for multi-horizon forecast matrix
+    feature_cols = get_feature_columns(mode="price_sentiment" if has_real_sentiment else "price_only")
     trained_models = {"name": best_model_name}
     trained_scalers = {}
+    model_names_map = {}
     for h in range(1, 6):
         m, s = train_final_model(features_df, h, model_name=best_model_name, feature_cols=feature_cols)
         if m is not None:
             trained_models[h] = m
             trained_scalers[h] = s
+            model_names_map[h] = best_model_name
 
     last_close = float(price_df["close"].iloc[-1])
     last_ts = str(price_df["timestamp_utc"].iloc[-1])
-    forecasts = generate_forecasts(features_df, trained_models, trained_scalers, ticker, timeframe, last_close, last_ts)
-
-    # Persist forecasts with run_id
+    forecasts = generate_forecasts(
+        features_df,
+        trained_models,
+        trained_scalers,
+        ticker,
+        timeframe,
+        last_close,
+        last_ts,
+        asset_class=asset_cfg.get("asset_class"),
+        data_mode=data_mode,
+        model_names=model_names_map,
+    )
     if forecasts:
         repo.save_forecasts(forecasts, run_id=run_id)
 
-    # Strategy Backtest (10 bps transaction costs)
-    logger.info("Running out-of-sample directional strategy backtest (cost: 10 bps)...")
+    # Strategy Backtest for primary model (horizon 1)
     y_test = val_results.get("y_test")
     y_pred = val_results.get("y_test_pred")
     test_ts = val_results.get("test_timestamps")
@@ -329,7 +304,7 @@ def run_pipeline(
     else:
         backtest_results = {}
 
-    # Experiment run summary persistence
+    # Persist summary experiment run record
     cov = get_price_coverage(price_df)
     sm = backtest_results.get("strategy_metrics", {})
     bm = backtest_results.get("buyhold_metrics", {})
@@ -353,11 +328,12 @@ def run_pipeline(
         "price_source": price_source,
         "price_count": len(price_df),
         "price_date_range": cov["date_range"],
+        "post_source": post_source,
         "apify_status": apify_status_msg,
         "post_count": len(posts_df),
         "post_date_range": post_coverage["date_range"],
         "news_count": len(news_df),
-        "synthetic_posts_used": False if not use_demo else True,
+        "synthetic_posts_used": bool(use_demo),
         "database": str(DATABASE_PATH),
     }
 
@@ -369,7 +345,7 @@ def run_pipeline(
         "price_provider": price_source,
         "price_count": len(price_df),
         "price_date_range": cov["date_range"],
-        "post_provider": "apify",
+        "post_provider": post_source,
         "post_count": len(posts_df),
         "post_date_range": post_coverage["date_range"],
         "news_count": len(news_df),
@@ -382,7 +358,7 @@ def run_pipeline(
         "strategy_sharpe": sm.get("sharpe_ratio"),
         "max_drawdown": sm.get("max_drawdown"),
         "status": "completed",
-        "notes": f"Provenance: {price_source} ({cov['date_range']}), Apify: {apify_status_msg}, News: {len(news_df)} articles",
+        "notes": f"Provenance: {price_source} ({cov['date_range']}), Post provider: {post_source} ({apify_status_msg})",
     })
 
     # Generate Reports
@@ -415,6 +391,8 @@ def run_pipeline(
         output_dir=str(reports_dir),
         run_id=run_id,
         provenance=provenance_metadata,
+        experiment_comparison_df=comparison_df,
+        coverage_diagnostics=coverage_diagnostics,
     )
 
     logger.info("Pipeline completed. Run ID: %s. Data Mode: %s. Reports saved in %s", run_id, data_mode.upper(), reports_dir)
@@ -429,6 +407,7 @@ def run_pipeline(
     print(f"* Out-of-Sample Test MAE: {tm.get('mae', 'N/A')} (Naive Baseline: {nm.get('mae', 'N/A')})")
     print(f"* Strategy Return: {sm.get('cumulative_return', 'N/A')} vs Buy & Hold: {bm.get('cumulative_return', 'N/A')}")
     print(f"* Strategy Sharpe: {sm.get('sharpe_ratio', 'N/A')}, Max Drawdown: {sm.get('max_drawdown', 'N/A')}")
+    print(f"* Multi-Horizon Experiment Suite: Evaluated {len(comparison_df)} model variants across horizons 1..5")
     print(f"* Reports Generated:")
     print(f"  - Outlook:    {reports_dir / 'current_sentiment_outlook.md'}")
     print(f"  - Evaluation: {reports_dir / 'evaluation_report.md'}")
@@ -443,6 +422,7 @@ def run_pipeline(
         "forecasts": forecasts,
         "val_results": val_results,
         "backtest_results": backtest_results,
+        "comparison_df": comparison_df,
     }
 
 
@@ -452,7 +432,17 @@ if __name__ == "__main__":
     parser.add_argument("--timeframe", default="1d", choices=["1d", "1h"], help="Timeframe (default: 1d)")
     parser.add_argument("--days", type=int, default=180, help="Lookback days (default: 180)")
     parser.add_argument("--demo", action="store_true", help="Explicitly run in synthetic demo mode")
+    parser.add_argument("--csv-posts", default=None, help="Path to historical X posts CSV file")
+    parser.add_argument("--use-historical-x", action="store_true", help="Use genuine historical X dataset (StephanAkkerman/financial-tweets)")
     parser.add_argument("--run-id", default=None, help="Custom run identifier")
     args = parser.parse_args()
 
-    run_pipeline(ticker=args.asset, timeframe=args.timeframe, days=args.days, use_demo=args.demo, run_id=args.run_id)
+    run_pipeline(
+        ticker=args.asset,
+        timeframe=args.timeframe,
+        days=args.days,
+        use_demo=args.demo,
+        csv_posts=args.csv_posts,
+        use_historical_x=args.use_historical_x,
+        run_id=args.run_id,
+    )

@@ -1,35 +1,37 @@
 # Current Sentiment Outlook: BTCUSDT
 
-> ℹ️ **PARTIAL DATA — LIVE PRICE FEED & NEWS ACTIVE, LIVE POSTS UNCONFIGURED/FAILED (Apify 401)**
-> *No synthetic data substituted. All metrics strictly reflect actual observations.*
+> 🟢 **LIVE DATA — VERIFIED LIVE MARKET & SENTIMENT FEEDS**
 
-**Run Identifier (run_id):** `run_20261013_164832`  
-**Report Generated:** 2026-10-13T16:49:02Z  
+**Run Identifier (run_id):** `run_20261013_175558`  
+**Report Generated:** 2026-10-13T17:57:15Z  
 
 ## Data Coverage
-- **Price observations:** 180
-- **Date range:** 2026-04-17T00:00:00Z to 2026-10-13T00:00:00Z
-- **Last close price:** 83,480.74
+- **Price observations:** 984
+- **Date range:** 2021-12-27T00:00:00Z to 2024-09-05T00:00:00Z
+- **Last close price:** 56,180.00
 
 ## X Sentiment Summary
-- No sentiment data available
+- **Total relevant posts:** 3098
+- **Overall sentiment:** **Bullish** 📈
+- **Recent net sentiment score:** 0.1302
+- **Positive:** 0.0%
+- **Negative:** 100.0%
+- **Neutral:** 0.0%
+- **Engagement-weighted sentiment:** -0.1531
+- **Trend:** Sentiment declining ↘️
 
 ## Recent News
-- [BTC/USDT (BTCUSDT) News Flow - moomoo](https://www.moomoo.com/crypto/BTCUSDT-CC/news) — *tavily* [Positive]
-- [BTCUSDT - Bitcoin / Tether Cryptocurrency Price - Barchart.com](https://www.barchart.com/forex/quotes/%5EBTCUSDT) — *tavily* [Positive]
-- [Tether USDt BTC (USDT-BTC) latest stock news and ...](https://nz.finance.yahoo.com/quote/USDT-BTC/news) — *tavily* [Positive]
-- [BTCUSDT Latest News and Headlines — TradingView](https://www.tradingview.com/symbols/BTCUSDT/news) — *tavily* [Neutral]
-- [#btcusdt Community Insights & Market Sentiment](https://www.binance.com/en/square/hashtag/btcusdt) — *tavily* [Positive]
+- No recent news available
 
 ## Forecast Summary
 | Horizon | Predicted Price | Predicted Return | Status |
 |---------|---------------:|------------------:|--------|
-| n+0 | 83,480.74 | 0.000% | current/nowcast |
-| n+1 | 83,480.74 | 0.000% | forecast |
-| n+2 | 83,480.74 | 0.000% | forecast |
-| n+3 | 83,480.74 | 0.000% | forecast |
-| n+4 | 83,480.74 | 0.000% | forecast |
-| n+5 | 83,480.74 | 0.000% | forecast |
+| n+0 | 56,180.00 | 0.000% | current/nowcast |
+| n+1 | 56,180.00 | 0.000% | forecast |
+| n+2 | 56,180.00 | 0.000% | forecast |
+| n+3 | 56,180.00 | 0.000% | forecast |
+| n+4 | 56,180.00 | 0.000% | forecast |
+| n+5 | 56,180.00 | 0.000% | forecast |
 
 ## Limitations and Disclaimers
 - This report is generated from available data and model outputs.

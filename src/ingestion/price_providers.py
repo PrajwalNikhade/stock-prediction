@@ -51,14 +51,17 @@ def _ensure_schema(df: pd.DataFrame, asset: str, timeframe: str, source: str) ->
 # Yahoo Finance provider
 # ---------------------------------------------------------------------------
 def fetch_yfinance(ticker: str, asset_ticker: str, timeframe: str,
-                   days: int = 180) -> pd.DataFrame:
+                   days: int = 180, start_date: str = None,
+                   end_date: str = None) -> pd.DataFrame:
     """Fetch historical data via yfinance.
 
     Args:
         ticker: yfinance ticker symbol (e.g. BTC-USD, NVDA)
         asset_ticker: canonical asset ticker for our system
         timeframe: '1h' or '1d'
-        days: lookback days
+        days: lookback days if start_date is not specified
+        start_date: optional start timestamp (e.g. '2023-11-14')
+        end_date: optional end timestamp
     """
     try:
         import yfinance as yf
@@ -70,16 +73,17 @@ def fetch_yfinance(ticker: str, asset_ticker: str, timeframe: str,
     interval_map = {"1d": "1d", "1h": "1h"}
 
     interval = interval_map.get(timeframe, "1d")
-    # yfinance hourly data limited to ~730 days for some tickers
     if timeframe == "1h":
-        # yfinance only provides ~730 days of hourly data for some assets
         period = f"{min(days, 729)}d"
     else:
         period = f"{days}d"
 
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period=period, interval=interval)
+        if start_date:
+            df = tk.history(start=start_date, end=end_date, interval=interval)
+        else:
+            df = tk.history(period=period, interval=interval)
         if df.empty:
             logger.warning("yfinance returned empty data for %s", ticker)
             return pd.DataFrame(columns=PRICE_COLUMNS)
@@ -104,7 +108,6 @@ def fetch_yfinance(ticker: str, asset_ticker: str, timeframe: str,
         df = df.rename(columns=rename_map)
 
         if "timestamp_utc" not in df.columns:
-            # Try first column as timestamp
             df = df.rename(columns={df.columns[0]: "timestamp_utc"})
 
         df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
@@ -127,14 +130,22 @@ BINANCE_INTERVALS = {"1h": "1h", "1d": "1d"}
 
 
 def fetch_binance(symbol: str, asset_ticker: str, timeframe: str,
-                  days: int = 180) -> pd.DataFrame:
+                  days: int = 180, start_date: str = None,
+                  end_date: str = None) -> pd.DataFrame:
     """Fetch historical candlestick data from Binance public API.
 
-    Supports pagination for large requests.
+    Supports pagination for large requests and explicit historical date ranges.
     """
     interval = BINANCE_INTERVALS.get(timeframe, "1d")
-    end_ms = int(utc_now().timestamp() * 1000)
-    start_ms = int((utc_now() - timedelta(days=days)).timestamp() * 1000)
+    if start_date:
+        start_ms = int(pd.to_datetime(start_date, utc=True).timestamp() * 1000)
+        if end_date:
+            end_ms = int(pd.to_datetime(end_date, utc=True).timestamp() * 1000)
+        else:
+            end_ms = int(utc_now().timestamp() * 1000)
+    else:
+        end_ms = int(utc_now().timestamp() * 1000)
+        start_ms = int((utc_now() - timedelta(days=days)).timestamp() * 1000)
     limit = 1000  # Binance max per request
 
     all_rows = []
@@ -229,20 +240,21 @@ def import_csv(file_path_or_buffer, asset_ticker: str, timeframe: str) -> pd.Dat
 # Unified fetch
 # ---------------------------------------------------------------------------
 def fetch_price_data(asset_config: dict, timeframe: str,
-                     days: int = 180) -> pd.DataFrame:
+                     days: int = 180, start_date: str = None,
+                     end_date: str = None) -> pd.DataFrame:
     """Fetch price data using the appropriate provider for the asset."""
     provider = asset_config.get("provider", "yfinance")
     ticker = asset_config["ticker"]
     yf_ticker = asset_config.get("yfinance_ticker", ticker)
 
     if provider == "binance":
-        df = fetch_binance(ticker, ticker, timeframe, days)
+        df = fetch_binance(ticker, ticker, timeframe, days, start_date=start_date, end_date=end_date)
         if df.empty:
             # Fallback to yfinance
             logger.info("Binance empty, falling back to yfinance for %s", ticker)
-            df = fetch_yfinance(yf_ticker, ticker, timeframe, days)
+            df = fetch_yfinance(yf_ticker, ticker, timeframe, days, start_date=start_date, end_date=end_date)
     else:
-        df = fetch_yfinance(yf_ticker, ticker, timeframe, days)
+        df = fetch_yfinance(yf_ticker, ticker, timeframe, days, start_date=start_date, end_date=end_date)
 
     return df
 

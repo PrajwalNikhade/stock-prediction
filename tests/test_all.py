@@ -33,9 +33,10 @@ from src.modeling.metrics import (
     mae, rmse, r_squared, mape, smape, directional_accuracy,
     sharpe_ratio, sortino_ratio, max_drawdown, calculate_trading_metrics,
 )
-from src.modeling.train import walk_forward_validate
+from src.modeling.train import walk_forward_validate, run_experiment_suite
 from src.modeling.backtesting import run_backtest
 from src.database.db import init_db, get_connection
+from src.database.repository import Repository
 from src.utils.demo_data import generate_demo_prices, generate_demo_posts
 
 
@@ -800,6 +801,249 @@ def test_equity_trading_session_timestamps(sample_price_df):
     assert "2026-10-09" in crypto_forecasts[0]["target_timestamp"]
     # n+1 must be Saturday (2026-10-10)
     assert "2026-10-10" in crypto_forecasts[1]["target_timestamp"]
+
+
+# ─── Priority 3 Regression Tests: Backtesting & Return Math ───────────
+
+def test_log_to_simple_return_conversion():
+    """Verify that forward log returns are converted to simple returns in backtesting."""
+    # Given log return r = 0.05
+    log_return = np.array([0.05, -0.05, 0.02, 0.01, -0.02, 0.03])
+    # Long signal for all
+    pred_long = np.array([0.01, 0.01, 0.01, 0.01, 0.01, 0.01])
+
+    bt = run_backtest(
+        predictions=pred_long,
+        actual_returns=log_return,
+        threshold=0.0,
+        transaction_cost_bps=0,  # Zero cost to isolate return math
+        asset="BTCUSDT",
+        timeframe="1d",
+    )
+    assert "results_df" in bt
+    rdf = bt["results_df"]
+
+    expected_simple_return = np.exp(0.05) - 1.0
+    # First period strategy return should equal exp(r) - 1
+    assert abs(rdf["strategy_return"].iloc[0] - expected_simple_return) < 1e-7
+    # Realized simple return column
+    assert abs(rdf["simple_realized_return"].iloc[0] - expected_simple_return) < 1e-7
+
+    # Short position test
+    pred_short = np.array([-0.01, -0.01, -0.01, -0.01, -0.01, -0.01])
+    bt_short = run_backtest(
+        predictions=pred_short,
+        actual_returns=log_return,
+        threshold=0.0,
+        allow_short=True,
+        transaction_cost_bps=0,
+        asset="BTCUSDT",
+        timeframe="1d",
+    )
+    rdf_short = bt_short["results_df"]
+    expected_short_return = -(np.exp(0.05) - 1.0)
+    assert abs(rdf_short["strategy_return"].iloc[0] - expected_short_return) < 1e-7
+
+
+def test_transaction_cost_scenarios():
+    """Verify entry, exit, reversal, and holding cost deductions."""
+    # Predictions: Enter long, hold long, reverse to short, exit to cash, stay cash, re-enter long
+    # Positions will be: 1.0, 1.0, -1.0, 0.0, 0.0, 1.0
+    preds = np.array([0.02, 0.02, -0.02, 0.00, 0.00, 0.02])
+    actuals = np.zeros(6)  # Zero market return to isolate costs
+
+    bt = run_backtest(
+        predictions=preds,
+        actual_returns=actuals,
+        threshold=0.005,
+        allow_short=True,
+        transaction_cost_bps=10,  # 10 bps = 0.0010
+        asset="BTCUSDT",
+        timeframe="1d",
+    )
+    rdf = bt["results_df"]
+    costs = rdf["transaction_cost"].values
+
+    # Bar 0: Enter long from cash (delta = 1) -> 0.0010
+    assert abs(costs[0] - 0.0010) < 1e-7
+    # Bar 1: Maintain long (delta = 0) -> 0.0
+    assert abs(costs[1] - 0.0) < 1e-7
+    # Bar 2: Reversal from long (+1) to short (-1) (delta = 2) -> 0.0020
+    assert abs(costs[2] - 0.0020) < 1e-7
+    # Bar 3: Exit short to cash (delta = 1) -> 0.0010
+    assert abs(costs[3] - 0.0010) < 1e-7
+    # Bar 4: Maintain cash (delta = 0) -> 0.0
+    assert abs(costs[4] - 0.0) < 1e-7
+    # Bar 5: Re-enter long from cash (delta = 1) -> 0.0010
+    assert abs(costs[5] - 0.0010) < 1e-7
+
+
+def test_wealth_initialization_and_max_drawdown():
+    """Verify that day-1 decline is included in max drawdown from initial wealth 1.0."""
+    # Immediate 10% loss on day 1
+    returns = np.array([-0.10, 0.05, 0.02, 0.01])
+    wealth = np.cumprod(1 + returns)  # [0.90, 0.945, 0.9639, 0.9735]
+
+    mdd = max_drawdown(wealth, include_initial_wealth=True)
+    # Peak is initial wealth 1.0, trough is 0.90 -> MDD is exactly 0.10 (10%)
+    assert abs(mdd - 0.10) < 1e-6
+
+
+def test_degenerate_strategy_metrics():
+    """Verify that strategies in constant cash report NaN for Sharpe and Sortino."""
+    # 100% cash strategy: all 0 returns
+    cash_returns = np.zeros(20)
+    sr = sharpe_ratio(cash_returns)
+    so = sortino_ratio(cash_returns)
+
+    assert np.isnan(sr), "Sharpe ratio of constant cash must be NaN"
+    assert np.isnan(so), "Sortino ratio of constant cash must be NaN"
+
+
+# ─── Priority 4 Regression Tests: Anti-Leakage Purge ─────────────────
+
+def test_walk_forward_zero_leakage_purge():
+    """Verify that training target endpoints never overlap the validation or test sets."""
+    demo_prices = generate_demo_prices("TEST", "1d", 120, 100)
+    features = build_features(demo_prices, pd.DataFrame(), "1d")
+
+    for horizon in [1, 2, 3, 5]:
+        res = walk_forward_validate(features, horizon=horizon, n_folds=3, test_ratio=0.2)
+        assert "error" not in res
+
+        dev_end = res["dev_end_idx"]
+        test_start = res["test_start_idx"]
+        gap = res["gap"]
+
+        # The purge gap must be at least horizon
+        assert gap >= horizon
+
+        # The maximum target endpoint in the dev set is (dev_end - 1) + horizon
+        # This endpoint must strictly precede test_start
+        max_dev_target_endpoint = (dev_end - 1) + horizon
+        assert max_dev_target_endpoint < test_start, (
+            f"Target leakage detected for horizon {horizon}: "
+            f"dev endpoint {max_dev_target_endpoint} >= test_start {test_start}"
+        )
+
+
+# ─── Priority 1 & 2 Regression Tests: CSV Importer & Fair Experiment Suite ───
+
+def test_historical_x_csv_importer():
+    """Verify CSV dataset importer parses columns, normalizes UTC, and preserves missing engagement."""
+    from src.ingestion.dataset_importer import import_historical_x_csv
+
+    csv_data = """timestamp,tweet_text,tweet_url,likes,reposts,views
+2024-01-15T12:00:00Z,"Bitcoin surges past 45k! #BTC",https://twitter.com/user/status/1746860000000000000,100,25,5000
+2024-01-16 08:30:00,"Market correction underway for $BTC",https://twitter.com/user/status/1747160000000000000,,,
+2024-01-15T12:00:00Z,"Bitcoin surges past 45k! #BTC",https://twitter.com/user/status/1746860000000000000,100,25,5000
+"""
+    df = import_historical_x_csv(csv_data, asset="BTCUSDT")
+
+    # Should deduplicate 3 rows to 2
+    assert len(df) == 2
+    # Timestamps normalized to ISO UTC
+    assert df["timestamp_utc"].iloc[0] == "2024-01-15T12:00:00Z"
+    assert "Z" in df["timestamp_utc"].iloc[1]
+    # Post ID extracted from URL
+    assert df["post_id"].iloc[0] == "1746860000000000000"
+    # Row 1 has engagement
+    assert df["likes"].iloc[0] == 100
+    # Row 2 has missing engagement preserved as NaN (not fabricated!)
+    assert np.isnan(df["likes"].iloc[1])
+    assert np.isnan(df["reposts"].iloc[1])
+
+
+def test_date_coverage_validation():
+    """Verify temporal overlap diagnostics and warnings."""
+    from src.ingestion.dataset_importer import validate_date_coverage
+
+    p_df = pd.DataFrame({
+        "timestamp_utc": pd.date_range("2024-01-01", periods=60, freq="D", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "close": np.linspace(100, 150, 60),
+    })
+
+    # Overlapping tweets (2024-01-10 to 2024-02-15)
+    t_df_overlap = pd.DataFrame({
+        "timestamp_utc": pd.date_range("2024-01-10", periods=35, freq="D", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "post_text": ["tweet"] * 35,
+    })
+    cov_good = validate_date_coverage(p_df, t_df_overlap)
+    assert cov_good["has_adequate_overlap"] is True
+    assert cov_good["n_aligned_observations"] >= 30
+
+    # Non-overlapping tweets (2025-01-01 onwards)
+    t_df_disjoint = pd.DataFrame({
+        "timestamp_utc": pd.date_range("2025-01-01", periods=30, freq="D", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "post_text": ["future tweet"] * 30,
+    })
+    cov_bad = validate_date_coverage(p_df, t_df_disjoint)
+    assert cov_bad["has_adequate_overlap"] is False
+    assert cov_bad["warning"] is not None
+
+
+def test_fair_experiment_suite_execution():
+    """Verify that multi-variant experiments execute across horizons on identical test windows."""
+    demo_prices = generate_demo_prices("BTCUSDT", "1d", 100, 50000)
+    features = build_features(demo_prices, pd.DataFrame(), "1d")
+
+    suite = run_experiment_suite(
+        features,
+        horizons=[1, 2, 3],
+        n_folds=2,
+        test_ratio=0.2,
+        asset="BTCUSDT",
+        timeframe="1d",
+        has_real_sentiment=False,
+    )
+    assert "comparison_df" in suite
+    cdf = suite["comparison_df"]
+    assert not cdf.empty
+
+    # Must contain Experiment A, B, and C
+    exp_names = cdf["experiment_id"].unique()
+    assert "exp_a_naive" in exp_names
+    assert "exp_b_price_only" in exp_names
+    assert "exp_c_primary" in exp_names
+
+    # Check relative MAE improvement formula
+    c_rows = cdf[cdf["experiment_id"] == "exp_c_primary"]
+    assert "relative_mae_improvement_pct" in c_rows.columns
+
+
+def test_experiment_evaluations_persistence(temp_db_path):
+    """Verify SQLite persistence and retrieval of experiment comparison records."""
+    init_db(temp_db_path)
+    repo = Repository(temp_db_path)
+
+    df_sample = pd.DataFrame([{
+        "experiment": "Experiment C (Primary: Price + X)",
+        "experiment_id": "exp_c_primary",
+        "asset": "BTCUSDT",
+        "timeframe": "1d",
+        "horizon": 1,
+        "feature_set": "Price + X sentiment",
+        "best_model": "HistGBR",
+        "validation_mae": 0.015,
+        "test_mae": 0.014,
+        "test_rmse": 0.018,
+        "directional_accuracy": 56.5,
+        "sharpe_ratio": 1.25,
+        "sortino_ratio": 1.60,
+        "max_drawdown": 0.08,
+        "strategy_return": 0.12,
+        "relative_mae_improvement_pct": 5.2,
+        "data_mode": "live",
+        "n_obs": 20,
+    }])
+
+    count = repo.save_experiment_evaluations(df_sample, run_id="run_test_001")
+    assert count == 1
+
+    retrieved = repo.get_experiment_evaluations(asset="BTCUSDT", run_id="run_test_001")
+    assert len(retrieved) == 1
+    assert retrieved.iloc[0]["best_model"] == "HistGBR"
+    assert retrieved.iloc[0]["relative_mae_improvement_pct"] == 5.2
 
 
 if __name__ == "__main__":

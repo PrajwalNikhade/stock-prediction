@@ -24,6 +24,8 @@ data/processed/
 data/exports/
 models/*.pkl
 models/*.joblib
+data/*.parquet
+*.parquet
 
 # IDE
 .vscode/

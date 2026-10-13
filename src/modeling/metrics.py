@@ -132,16 +132,25 @@ def sortino_ratio(returns: np.ndarray, target_return: float = 0.0,
     return float(np.mean(excess) / dd * np.sqrt(periods_per_year))
 
 
-def max_drawdown(cumulative_returns: np.ndarray) -> float:
-    """Maximum drawdown from cumulative return series.
+def max_drawdown(cumulative_returns: np.ndarray, include_initial_wealth: bool = True) -> float:
+    """Maximum drawdown from cumulative return series (wealth index).
 
     cumulative_returns should be a wealth index (e.g., starting at 1.0).
     MDD = max((peak - trough) / peak)
+    Guarantees initial wealth of 1.0 is included so an initial decline is recognized.
     """
-    if len(cumulative_returns) < 2:
+    if len(cumulative_returns) < 1:
         return float("nan")
-    peak = np.maximum.accumulate(cumulative_returns)
-    drawdowns = (peak - cumulative_returns) / np.where(peak > 0, peak, 1)
+    wealth = np.array(cumulative_returns, dtype=float)
+    wealth = wealth[np.isfinite(wealth)]
+    if len(wealth) == 0:
+        return float("nan")
+    if include_initial_wealth and wealth[0] != 1.0:
+        wealth = np.insert(wealth, 0, 1.0)
+    if len(wealth) < 2:
+        return 0.0
+    peak = np.maximum.accumulate(wealth)
+    drawdowns = (peak - wealth) / np.where(peak > 0, peak, 1.0)
     return float(np.max(drawdowns))
 
 
@@ -151,7 +160,7 @@ def calculate_trading_metrics(returns: np.ndarray, positions: np.ndarray = None,
     """Calculate comprehensive trading strategy metrics.
 
     Args:
-        returns: per-period strategy returns (after costs)
+        returns: per-period simple strategy returns (after costs)
         positions: position array (for trade counting)
         transaction_cost_bps: cost in basis points per trade
         periods_per_year: for annualization
@@ -167,44 +176,48 @@ def calculate_trading_metrics(returns: np.ndarray, positions: np.ndarray = None,
             "win_rate", "num_trades", "avg_return_per_trade",
         ]}
 
-    # Cumulative return
+    # Wealth index starting from initial capital 1.0
     wealth = np.cumprod(1 + returns)
-    cum_ret = wealth[-1] - 1
+    cum_ret = float(wealth[-1] - 1.0)
 
     # Annualized return
     n_periods = len(returns)
     if n_periods >= periods_per_year:
         ann_ret = (1 + cum_ret) ** (periods_per_year / n_periods) - 1
     else:
-        ann_ret = cum_ret  # Too short for meaningful annualization
+        ann_ret = cum_ret  # Short window: keep unannualized to avoid exaggeration
 
     # Volatility
-    ann_vol = np.std(returns, ddof=1) * np.sqrt(periods_per_year)
+    ann_vol = float(np.std(returns, ddof=1) * np.sqrt(periods_per_year))
 
     # Win rate
     positive_returns = returns[returns > 0]
-    win_rate = len(positive_returns) / len(returns) * 100 if len(returns) > 0 else 0
+    win_rate = float(len(positive_returns) / len(returns) * 100) if len(returns) > 0 else 0.0
 
     # Trade count
     num_trades = 0
     if positions is not None:
         positions = np.array(positions, dtype=float)
+        # Position change counts entry, reversal, or exit
         num_trades = int(np.sum(np.abs(np.diff(positions)) > 0))
+        # If first position was non-zero, it was an entry
+        if len(positions) > 0 and positions[0] != 0:
+            num_trades += 1
 
-    # Average return per trade
+    # Average return per active trade
     active_returns = returns[returns != 0]
-    avg_ret_per_trade = float(np.mean(active_returns)) if len(active_returns) > 0 else 0
+    avg_ret_per_trade = float(np.mean(active_returns)) if len(active_returns) > 0 else float("nan")
 
     return {
         "cumulative_return": float(cum_ret),
         "annualized_return": float(ann_ret),
         "sharpe_ratio": sharpe_ratio(returns, periods_per_year=periods_per_year),
         "sortino_ratio": sortino_ratio(returns, periods_per_year=periods_per_year),
-        "max_drawdown": max_drawdown(wealth),
+        "max_drawdown": max_drawdown(wealth, include_initial_wealth=True),
         "annualized_volatility": float(ann_vol),
         "win_rate": float(win_rate),
         "num_trades": num_trades,
-        "avg_return_per_trade": float(avg_ret_per_trade),
+        "avg_return_per_trade": float(avg_ret_per_trade) if not np.isnan(avg_ret_per_trade) else 0.0,
         "n_periods": n_periods,
         "periods_per_year": periods_per_year,
     }

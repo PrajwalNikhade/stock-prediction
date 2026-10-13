@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--asset", default="BTCUSDT", help="Asset ticker (default: BTCUSDT)")
     parser.add_argument("--timeframe", default="1d", choices=["1d", "1h"], help="Timeframe (default: 1d)")
     parser.add_argument("--days", type=int, default=180, help="Lookback days (default: 180)")
+    parser.add_argument("--csv-posts", default=None, help="Path to historical X posts CSV file")
+    parser.add_argument("--use-historical-x", action="store_true", help="Use genuine historical X dataset (StephanAkkerman/financial-tweets)")
     parser.add_argument("--run-id", default=None, help="Optional run identifier override")
     args = parser.parse_args()
 
@@ -43,6 +45,8 @@ def main():
         timeframe=args.timeframe,
         days=args.days,
         use_demo=False,
+        csv_posts=args.csv_posts,
+        use_historical_x=args.use_historical_x,
         run_id=args.run_id,
     )
 

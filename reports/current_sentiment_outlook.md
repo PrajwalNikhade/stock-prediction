@@ -1,9 +1,10 @@
 # Current Sentiment Outlook: BTCUSDT
 
-> 🟢 **LIVE DATA — VERIFIED LIVE MARKET & SENTIMENT FEEDS**
+> 🟡 **HISTORICAL ARCHIVE BENCHMARK — Evaluated on historical price and X sentiment archive (Dec 2021 – Sep 2024).**
+> *Notice: This report presents historical out-of-sample backtest metrics, NOT a live nowcast of current real-time market prices.*
 
-**Run Identifier (run_id):** `run_20261013_175558`  
-**Report Generated:** 2026-10-13T17:57:15Z  
+**Run Identifier (run_id):** `run_20261013_182342`  
+**Report Generated:** 2026-10-13T18:24:30Z  
 
 ## Data Coverage
 - **Price observations:** 984

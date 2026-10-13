@@ -122,7 +122,11 @@ def run_pipeline(
         else:
             price_df = fetch_price_data(asset_cfg, timeframe, days=days)
 
-        price_source = price_df["source"].iloc[0] if "source" in price_df.columns else "binance"
+        if price_df.empty:
+            logger.error("Could not retrieve price data for %s.", ticker)
+            print("ERROR: Could not retrieve price data.")
+            return None
+        price_source = price_df["source"].iloc[0] if "source" in price_df.columns and len(price_df) > 0 else "exchange"
 
     else:
         # Standard Live Mode: Fetch market prices
@@ -196,7 +200,10 @@ def run_pipeline(
     if use_demo:
         data_mode = "demo"
     elif not posts_df.empty and not price_df.empty and coverage_diagnostics.get("has_adequate_overlap", False):
-        data_mode = "live"
+        if use_historical_x or csv_posts:
+            data_mode = "historical"
+        else:
+            data_mode = "live"
     elif not price_df.empty:
         data_mode = "partial"
     else:
@@ -224,14 +231,16 @@ def run_pipeline(
 
     # Feature engineering
     logger.info("Building features (data mode: %s)...", data_mode)
-    features_df = build_features(price_df, sentiment_agg, timeframe, news_df=news_df)
+    # Strictly exclude contemporary news when evaluating historical archives to eliminate lookahead leakage
+    effective_news_df = news_df if data_mode != "historical" else pd.DataFrame()
+    features_df = build_features(price_df, sentiment_agg, timeframe, news_df=effective_news_df)
     features_df = create_targets(features_df, horizons=[1, 2, 3, 4, 5])
     repo.save_engineered_features(features_df, ticker, timeframe, run_id=run_id)
 
     # Run multi-variant experiment comparison suite across all horizons (Priority 2)
     has_real_sentiment = not sentiment_agg.empty and coverage_diagnostics.get("has_adequate_overlap", False)
     has_eng = bool(has_real_sentiment and "engagement_weighted_sentiment" in sentiment_agg.columns and sentiment_agg["engagement_weighted_sentiment"].notna().any())
-    has_nws = bool(not news_df.empty and "news_mean_sentiment" in features_df.columns and features_df["news_mean_sentiment"].notna().any())
+    has_nws = bool(not effective_news_df.empty and "news_mean_sentiment" in features_df.columns and features_df["news_mean_sentiment"].notna().any())
 
     logger.info("Executing fair model comparison suite across horizons 1..5...")
     exp_suite = run_experiment_suite(

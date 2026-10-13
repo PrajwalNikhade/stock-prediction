@@ -26,11 +26,15 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
         lines.append("> ⚠️ **DEMO MODE — NO VERIFIED LIVE DATA (Synthetic Fixtures)**")
         lines.append("")
     elif data_source == "partial":
-        lines.append("> ℹ️ **PARTIAL DATA — LIVE PRICE FEED & NEWS ACTIVE, LIVE POSTS UNCONFIGURED/FAILED (Apify 401)**")
+        lines.append("> ℹ️ **PARTIAL LIVE DATA — Live market prices and news active; social X scraper quota reached (0 live posts).**")
         lines.append("> *No synthetic data substituted. All metrics strictly reflect actual observations.*")
         lines.append("")
+    elif data_source in ("historical", "historical_benchmark"):
+        lines.append("> 🟡 **HISTORICAL ARCHIVE BENCHMARK — Evaluated on historical price and X sentiment archive (Dec 2021 – Sep 2024).**")
+        lines.append("> *Notice: This report presents historical out-of-sample backtest metrics, NOT a live nowcast of current real-time market prices.*")
+        lines.append("")
     else:
-        lines.append("> 🟢 **LIVE DATA — VERIFIED LIVE MARKET & SENTIMENT FEEDS**")
+        lines.append("> 🟢 **LIVE DATA — VERIFIED CURRENT MARKET & RECENTLY SCRAPED X POSTS**")
         lines.append("")
     lines.append(f"**Run Identifier (run_id):** `{run_id or 'N/A'}`  ")
     lines.append(f"**Report Generated:** {now_str}  ")

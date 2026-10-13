@@ -256,6 +256,20 @@ def fetch_price_data(asset_config: dict, timeframe: str,
     else:
         df = fetch_yfinance(yf_ticker, ticker, timeframe, days, start_date=start_date, end_date=end_date)
 
+    if df.empty:
+        try:
+            from src.database.repository import Repository
+            from pathlib import Path
+            db_path = Path(__file__).resolve().parent.parent.parent / "data" / "crowdwisdom.db"
+            if db_path.exists():
+                repo = Repository(str(db_path))
+                cached = repo.get_price_bars(ticker, timeframe)
+                if not cached.empty:
+                    logger.info("Using %d cached price bars from SQLite for %s", len(cached), ticker)
+                    df = cached
+        except Exception as e:
+            logger.debug("Could not read cached prices from DB: %s", e)
+
     return df
 
 

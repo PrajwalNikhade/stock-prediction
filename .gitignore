@@ -1,0 +1,43 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Cache and testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data and models
+data/*.db
+data/*.db-wal
+data/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+data/raw/
+data/processed/
+data/exports/
+models/*.pkl
+models/*.joblib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log

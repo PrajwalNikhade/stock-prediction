@@ -1,0 +1,138 @@
+# Asset configuration for CrowdWisdomTrading
+asset_classes:
+  cryptocurrency:
+    - ticker: BTCUSDT
+      name: Bitcoin
+      provider: binance
+      yfinance_ticker: BTC-USD
+      search_terms:
+        - BTCUSDT
+        - BTC-USD
+        - Bitcoin
+        - "$BTC"
+        - BTC
+    - ticker: ETHUSDT
+      name: Ethereum
+      provider: binance
+      yfinance_ticker: ETH-USD
+      search_terms:
+        - ETHUSDT
+        - ETH-USD
+        - Ethereum
+        - "$ETH"
+        - ETH
+    - ticker: SOLUSDT
+      name: Solana
+      provider: binance
+      yfinance_ticker: SOL-USD
+      search_terms:
+        - SOLUSDT
+        - SOL-USD
+        - Solana
+        - "$SOL"
+        - SOL
+
+  us_equities:
+    - ticker: NVDA
+      name: NVIDIA
+      provider: yfinance
+      yfinance_ticker: NVDA
+      search_terms:
+        - NVDA
+        - NVIDIA
+        - "Nvidia stock"
+        - "$NVDA"
+    - ticker: TSLA
+      name: Tesla
+      provider: yfinance
+      yfinance_ticker: TSLA
+      search_terms:
+        - TSLA
+        - Tesla
+        - "Tesla stock"
+        - "$TSLA"
+    - ticker: AAPL
+      name: Apple
+      provider: yfinance
+      yfinance_ticker: AAPL
+      search_terms:
+        - AAPL
+        - Apple
+        - "Apple stock"
+        - "$AAPL"
+    - ticker: MSFT
+      name: Microsoft
+      provider: yfinance
+      yfinance_ticker: MSFT
+      search_terms:
+        - MSFT
+        - Microsoft
+        - "Microsoft stock"
+        - "$MSFT"
+
+  indian_equities:
+    - ticker: RELIANCE.NS
+      name: Reliance Industries
+      provider: yfinance
+      yfinance_ticker: RELIANCE.NS
+      search_terms:
+        - RELIANCE
+        - "Reliance Industries"
+        - "$RELIANCE"
+        - "Reliance stock"
+    - ticker: TCS.NS
+      name: TCS
+      provider: yfinance
+      yfinance_ticker: TCS.NS
+      search_terms:
+        - TCS
+        - "Tata Consultancy"
+        - "$TCS"
+        - "TCS stock"
+    - ticker: INFY.NS
+      name: Infosys
+      provider: yfinance
+      yfinance_ticker: INFY.NS
+      search_terms:
+        - INFY
+        - Infosys
+        - "$INFY"
+        - "Infosys stock"
+
+  forex:
+    - ticker: EURUSD=X
+      name: EUR/USD
+      provider: yfinance
+      yfinance_ticker: EURUSD=X
+      search_terms:
+        - EURUSD
+        - "EUR/USD"
+        - "Euro Dollar"
+    - ticker: GBPUSD=X
+      name: GBP/USD
+      provider: yfinance
+      yfinance_ticker: GBPUSD=X
+      search_terms:
+        - GBPUSD
+        - "GBP/USD"
+        - "Pound Dollar"
+
+  commodities:
+    - ticker: GC=F
+      name: Gold
+      provider: yfinance
+      yfinance_ticker: GC=F
+      search_terms:
+        - Gold
+        - XAUUSD
+        - "Gold price"
+        - "$GOLD"
+    - ticker: CL=F
+      name: Crude Oil
+      provider: yfinance
+      yfinance_ticker: CL=F
+      search_terms:
+        - "Crude Oil"
+        - WTI
+        - "Oil price"
+        - "$OIL"

@@ -1,303 +1,183 @@
-# SmartStock AI — Explainable Indian Stock Market Analytics & Prediction Platform
+# CrowdWisdomTrading — X Sentiment Price Prediction Agent
 
-A production-quality, portfolio-grade full-stack application combining real-time Indian stock market analytics with explainable AI predictions.
-
-![Tech Stack](https://img.shields.io/badge/Next.js-15-black?logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
-![Flask](https://img.shields.io/badge/Flask-3.1-green?logo=flask)
-![XGBoost](https://img.shields.io/badge/XGBoost-2.1-orange)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-
-## Features
-
-### 📊 Real-Time Dashboard
-- Live market status (IST-aware open/close detection)
-- Nifty 50 & Sensex indices with change tracking
-- Top Gainers & Losers (calculated from NSE stocks)
-- Sector Performance Heatmap (10 sectors)
-- Market News with sentiment indicators
-- Watchlist widget
-
-### 🔍 Stock Search & Analysis
-- Autocomplete search across 50 curated NSE stocks
-- Recent search history tracking
-- Comprehensive stock info: OHLCV, 52-week range, market cap, P/E, EPS, beta
-
-### 📈 Interactive Charts
-- Candlestick charts with volume overlay (Plotly.js)
-- Multiple time periods: 1M, 3M, 6M, 1Y, 2Y, 5Y
-- Feature importance horizontal bar charts
-- Technical indicator visualizations
-
-### 🤖 ML Predictions (XGBoost)
-- **1-Day, 7-Day, 30-Day** price forecasts
-- 15+ engineered features: SMA, EMA, MACD, RSI, ADX, ATR, Bollinger Bands, VWAP, OBV, CCI, Momentum, ROC, Williams %R, Stochastic, lag features, rolling statistics
-- TimeSeriesSplit cross-validation (5 folds)
-- Model metrics: MAE, RMSE, R² with standard deviations
-- Prediction confidence scores
-
-### 🧠 Explainable AI
-- Feature importance visualization (top 15 features)
-- Top contributing factors for each prediction
-- Detailed signal breakdown for recommendations
-- No black-box LLMs — fully transparent rule engine
-
-### 🕯️ Candlestick Pattern Detection
-- 8 patterns: Hammer, Doji, Morning Star, Evening Star, Bullish/Bearish Engulfing, Harami, Shooting Star
-- Bullish/bearish bias summary
-- Pattern descriptions and significance ratings
-
-### 📰 News & Sentiment
-- Google News RSS feed integration
-- TextBlob sentiment analysis (polarity scoring)
-- Positive/Neutral/Negative classification
-- Sentiment summary per stock
-- Sentiment scores feed into ML predictions
-
-### 💡 AI Recommendations
-- Buy / Hold / Sell based on:
-  - RSI (oversold/overbought zones)
-  - MACD crossover signals
-  - ADX trend strength
-  - Bollinger Band positioning
-  - Stochastic Oscillator
-  - ML prediction direction & confidence
-  - News sentiment score
-- Detailed signal-by-signal breakdown
-- Confidence percentage with composite scoring
-
-### ⭐ Watchlist & 🔔 Alerts
-- Full CRUD watchlist with pin/favorite support
-- Price alerts (above/below)
-- RSI alerts (above/below)
-- Persistent storage in MySQL/SQLite
+A quantitative time-series research tool and machine learning application that predicts asset prices using historical X (Twitter) sentiment and financial price data. Built for the CrowdWisdomTrading Quantitative Data Scientist assessment.
 
 ---
 
-## Tech Stack
+## 📌 Project Overview
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | Next.js 15, TypeScript, Tailwind CSS, React Query, Plotly.js, Framer Motion, Lucide Icons |
-| **Backend** | Flask, Flask-CORS, SQLAlchemy, Flask-Migrate |
-| **Database** | MySQL (production) / SQLite (development) |
-| **ML** | XGBoost, Scikit-learn, Pandas, NumPy |
-| **Technical Analysis** | ta library (30+ indicators) |
-| **NLP** | TextBlob, feedparser |
-| **Data** | Yahoo Finance (yfinance) |
+CrowdWisdomTrading combines:
+* **Alternative Data**: Historical X posts via Apify, recent financial news via Tavily and Exa.
+* **Financial Price Data**: High-resolution OHLCV price histories from Binance (Crypto) and Yahoo Finance (Equities/ETFs), plus custom CSV ingestion.
+* **Hybrid Sentiment Engine**: VADER rule-based sentiment + engagement-weighted scoring (log-scaled likes, reposts, views, follower reach) with optional financial FinBERT transformers.
+* **Rigorous Quantitative Features**: Point-in-time, backward-looking features with strict anti-leakage controls.
+* **Walk-Forward Validation**: Chronological expanding-window validation with horizon-aware embargo/gap to eliminate target overlap leakage.
+* **Direct Multi-Horizon Forecasting**: 6 forecast output slots ($n+0$ nowcast through $n+1 \dots n+5$ forward horizons) with $\exp(\hat{r}_h)$ conversion.
+* **Strategy Backtesting**: Out-of-sample directional trading with realistic transaction costs (10 bps default) compared against Buy-and-Hold.
+* **Interactive Research Dashboard**: Full-featured 7-tab Streamlit dashboard with Plotly charts, executive KPIs, model inspections, and logs.
 
 ---
 
-## Project Structure
+## 📁 Repository Structure
 
 ```
-Stock/
-├── frontend/                  # Next.js 15 App Router
-│   ├── src/
-│   │   ├── app/               # Pages (/, /stocks, /stocks/[symbol], /watchlist, /alerts, /about)
-│   │   ├── components/        # Reusable components (charts, layout, ui)
-│   │   ├── hooks/             # React Query hooks
-│   │   ├── lib/               # API client, types, utilities
-│   │   └── providers/         # Query & Theme providers
-│   └── package.json
-│
-├── backend/                   # Flask REST API
-│   ├── app/
-│   │   ├── models/            # SQLAlchemy ORM models (6 tables)
-│   │   ├── routes/            # API blueprints (market, stocks, prediction, news, watchlist, alerts)
-│   │   ├── services/          # Business logic (stock, prediction, news, recommendation, candlestick, market)
-│   │   ├── ml/                # XGBoost model, feature engineering
-│   │   └── utils/             # NSE stocks list
-│   ├── requirements.txt
-│   └── run.py
-│
-├── database/
-│   └── schema.sql             # MySQL schema
-│
-└── README.md
+stock/
+├── app.py                      # Main Streamlit dashboard application (7 interactive tabs)
+├── requirements.txt            # Project dependencies
+├── .env.example                # Sample environment configuration template
+├── README.md                   # Complete documentation and user guide
+├── config/
+│   ├── assets.yaml             # Asset registry (Crypto, US Equities, Commodities, Indices)
+│   └── settings.py             # Central application configuration & environment loader
+├── src/
+│   ├── ingestion/              # Data ingestion adapters
+│   │   ├── apify_client.py     # Apify actor integration for X posts
+│   │   ├── price_providers.py  # Binance public API & Yahoo Finance & CSV loaders
+│   │   ├── tavily_client.py    # Tavily news discovery
+│   │   └── exa_client.py       # Exa neural search client
+│   ├── processing/             # Data cleaning, sentiment, & feature engineering
+│   │   ├── data_cleaning.py    # Deduplication, text normalization, timestamp validation
+│   │   ├── sentiment.py        # Hybrid VADER + engagement weighting
+│   │   ├── aggregation.py      # Hourly/daily UTC sentiment period aggregations
+│   │   └── feature_engineering.py # Point-in-time features & target generation
+│   ├── modeling/               # Machine learning & backtesting
+│   │   ├── train.py            # Chronological walk-forward validation & candidate models
+│   │   ├── forecasting.py      # Direct multi-horizon forecast matrix (n+0 to n+5)
+│   │   ├── metrics.py          # MAE, RMSE, R², Dir. Accuracy, Sharpe, Sortino, Drawdown
+│   │   └── backtesting.py      # Out-of-sample directional trading backtest
+│   ├── database/               # Local persistence
+│   │   ├── db.py               # SQLite schema initialization
+│   │   └── repository.py       # CRUD operations for prices, posts, models, and forecasts
+│   ├── reporting/              # Markdown report generators
+│   │   ├── sentiment_report.py # One-page current sentiment outlook generator
+│   │   └── evaluation_report.py# Comprehensive model evaluation report generator
+│   └── utils/
+│       ├── demo_data.py        # Synthetic deterministic demo data generator
+│       ├── logging_config.py   # Standardized logging configuration
+│       └── time_utils.py       # Strict UTC datetime parsers and converters
+├── scripts/
+│   ├── run_live_workflow.py    # Main reproducible live workflow entrypoint
+│   ├── generate_reports.py     # Pipeline runner and report generator
+│   └── check_live_apis.py      # Diagnostic tool to verify external API credentials
+├── reports/                    # Generated Markdown reports
+│   ├── current_sentiment_outlook.md
+│   └── evaluation_report.md
+└── tests/
+    └── test_all.py             # Comprehensive test suite (35 tests covering all pipeline stages)
 ```
 
 ---
 
-## Installation & Setup
+## 🚀 Quickstart
 
-### Prerequisites
-- **Node.js** 20+ and npm
-- **Python** 3.10+
-- **MySQL** (optional — SQLite is used by default)
+### 1. Installation
 
-### 1. Clone & Setup Backend
+Ensure Python 3.10+ (tested on Python 3.13) is installed:
 
 ```bash
-cd Stock/backend
-
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
-
-# Install dependencies
+git clone <repo-url>
+cd stock
 pip install -r requirements.txt
-
-# Copy environment config
-copy .env.example .env       # Windows
-# cp .env.example .env       # macOS/Linux
-
-# Run the server
-python run.py
 ```
 
-The Flask API starts at **http://localhost:5000**.
+### 2. Environment Configuration
 
-### 2. Setup Frontend
+Copy `.env.example` to `.env`:
 
 ```bash
-cd Stock/frontend
-
-# Install dependencies
-npm install
-
-# Run dev server
-npm run dev
+cp .env.example .env
 ```
 
-The Next.js app starts at **http://localhost:3000**.
+Edit `.env` to supply API tokens (optional for demo/testing mode):
+```ini
+APIFY_API_TOKEN=your_apify_token_here
+TAVILY_API_KEY=your_tavily_api_key_here
+EXA_API_KEY=your_exa_api_key_here
+DATABASE_PATH=data/crowdwisdom.db
+TRANSACTION_COST_BPS=10
+```
 
-### 3. (Optional) MySQL Setup
+> **Note on Graceful Degradation**: If external API credentials are not set, the platform operates seamlessly in **Demo Mode**, generating clearly-labeled synthetic data for testing and interactive dashboard demonstration. Public crypto price feeds (Binance) work live with zero credentials!
+
+### 3. Running the Streamlit Dashboard
+
+Launch the interactive web application:
 
 ```bash
-# Create database and run schema
-mysql -u root -p < database/schema.sql
-
-# Update backend/.env
-# DATABASE_URL=mysql+pymysql://root:password@localhost:3306/smartstock
+streamlit run app.py
 ```
 
----
+The application opens at `http://localhost:8501`.
 
-## API Documentation
+### 4. Running the CLI Pipeline & Generating Reports
 
-### Market Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/market/status` | Market open/close status |
-| GET | `/api/market/indices` | Nifty 50 & Sensex data |
-| GET | `/api/market/gainers` | Top gaining stocks |
-| GET | `/api/market/losers` | Top losing stocks |
-| GET | `/api/market/sectors` | Sector performance |
-
-### Stock Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/stocks/search?q=` | Autocomplete search |
-| GET | `/api/stocks/{symbol}` | Stock info |
-| GET | `/api/stocks/{symbol}/history?period=1y` | Historical OHLCV |
-| GET | `/api/stocks/{symbol}/indicators` | Technical indicators |
-| GET | `/api/stocks/{symbol}/candlestick-patterns` | Pattern detection |
-
-### Prediction Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/predict/{symbol}` | ML predictions (1d, 7d, 30d) |
-| GET | `/api/predict/{symbol}/importance` | Feature importance |
-| GET | `/api/predict/{symbol}/metrics` | Model evaluation metrics |
-| GET | `/api/predict/{symbol}/recommendation` | AI Buy/Hold/Sell |
-
-### News Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/news/market` | Market news |
-| GET | `/api/news/{symbol}` | Stock news + sentiment |
-
-### Watchlist Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/watchlist` | Get watchlist |
-| POST | `/api/watchlist` | Add to watchlist |
-| PUT | `/api/watchlist/{id}` | Update pin/favorite |
-| DELETE | `/api/watchlist/{id}` | Remove from watchlist |
-
-### Alert Endpoints
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/alerts` | Get alerts |
-| POST | `/api/alerts` | Create alert |
-| PUT | `/api/alerts/{id}` | Update alert |
-| DELETE | `/api/alerts/{id}` | Delete alert |
-
----
-
-## Database Schema (ER Diagram)
-
-```
-┌─────────────┐     ┌─────────────┐     ┌──────────────┐
-│   USERS     │────<│  WATCHLIST   │     │PREDICTIONS   │
-│─────────────│     │─────────────│     │   CACHE      │
-│ id (PK)     │     │ id (PK)     │     │──────────────│
-│ username    │     │ user_id(FK) │     │ id (PK)      │
-│ email       │     │ symbol      │     │ symbol       │
-│ password    │     │ company_name│     │ pred_1d      │
-│ created_at  │     │ is_pinned   │     │ pred_7d      │
-│ updated_at  │     │ is_favorite │     │ pred_30d     │
-└─────────────┘     │ added_at    │     │ confidence   │
-       │            └─────────────┘     │ feature_imp  │
-       │                                │ metrics      │
-       │            ┌─────────────┐     │ recommendation│
-       └───────────<│   ALERTS    │     └──────────────┘
-                    │─────────────│
-                    │ id (PK)     │     ┌──────────────┐
-                    │ user_id(FK) │     │ NEWS_CACHE   │
-                    │ symbol      │     │──────────────│
-                    │ alert_type  │     │ id (PK)      │
-                    │ target_value│     │ symbol       │
-                    │ is_active   │     │ title        │
-                    │ is_triggered│     │ sentiment    │
-                    └─────────────┘     │ published_at │
-       │                                └──────────────┘
-       │            ┌──────────────┐
-       └───────────<│RECENT_SEARCH │
-                    │──────────────│
-                    │ id (PK)      │
-                    │ user_id (FK) │
-                    │ symbol       │
-                    │ searched_at  │
-                    └──────────────┘
-```
-
----
-
-## Deployment
-
-### Frontend → Vercel
+Run the end-to-end pipeline and generate fresh markdown reports:
 
 ```bash
-cd frontend
-npx vercel --prod
+python scripts/generate_reports.py
 ```
 
-Set environment variable: `NEXT_PUBLIC_API_URL=https://your-backend.onrender.com`
+Outputs will be saved in:
+* `reports/current_sentiment_outlook.md`
+* `reports/evaluation_report.md`
 
-### Backend → Render
+### 5. Running the Test Suite
 
-1. Connect your GitHub repository
-2. Set build command: `pip install -r requirements.txt`
-3. Set start command: `gunicorn run:app`
-4. Add environment variables: `DATABASE_URL`, `SECRET_KEY`, `FRONTEND_URL`
+Execute all 29 automated tests:
 
----
-
-## Key Design Decisions
-
-1. **XGBoost only** — focused model with proven performance on tabular financial data
-2. **Rule-based recommendations** — fully transparent, no LLM/ChatGPT dependency
-3. **Yahoo Finance** — free, reliable, no API key needed (.NS suffix for NSE)
-4. **TextBlob** — lightweight sentiment analysis, no external API calls
-5. **SQLite default** — zero-config development, MySQL for production
-6. **Prediction caching** — avoids re-training on every request (24h TTL)
-7. **TimeSeriesSplit** — proper time-series cross-validation to prevent lookahead bias
+```bash
+pytest tests/test_all.py -v
+```
 
 ---
 
-## License
+## 🔬 Methodology & Architecture
 
-MIT — Educational portfolio project. Not financial advice.
+### Hybrid Sentiment Analysis
+Post sentiment is calculated via a dual-layer approach:
+1. **Rule-Based Engine**: VADER sentiment provides robust text polarity scores (`compound`, `pos`, `neg`, `neu`) calibrated for social media informal language and financial cashtags.
+2. **Engagement Weighting**: High-impact tweets from influential accounts receive higher weight in period aggregations using a bounded logarithmic formula:
+   $$\text{weight} = \ln(1 + \text{likes}) + 0.5 \ln(1 + \text{reposts}) + 0.3 \ln(1 + \frac{\text{views}}{1000}) + 0.2 \ln(1 + \frac{\text{followers}}{1000})$$
+   (capped at 10.0 to prevent outlier distortion).
+
+### Point-in-Time Feature Engineering & Leakage Prevention
+To ensure institutional-grade validity:
+* All features use **backward-looking lags only** ($t-1, t-2, t-3, t-5$).
+* Missing sentiment periods are explicitly flagged (`sentiment_missing = 1`) and differentiated from 0.0 scores.
+* Targets are computed as future log returns:
+  $$r_{t, h} = \ln\left(\frac{P_{t+h}}{P_t}\right)$$
+* Feature standard scalers are fitted **only** on the training split of each fold and applied to validation/test without lookahead.
+
+### Walk-Forward Cross-Validation
+* Uses chronological expanding windows across $K$ folds.
+* Incorporates a **horizon-aware embargo gap** ($\text{gap} = h + 1$) between the training window and validation set to ensure multi-step forward return targets never overlap between splits.
+* Compares candidate estimators (**Ridge Regression, HistGradientBoosting, Random Forest, XGBoost**) against a strict **Naive Random-Walk Baseline** (zero return prediction).
+
+### Forecast Matrix
+Generates 6 distinct slots:
+* **$n+0$**: Current-period reference/nowcast (observed close price).
+* **$n+1$ to $n+5$**: Forward multi-step predictions generated by dedicated direct models, converting predicted log return to price:
+  $$\hat{P}_{n+h} = P_n \times \exp(\hat{r}_h)$$
+
+---
+
+## 🧪 Verification & Test Coverage
+
+The test suite in `tests/test_all.py` includes 29 deterministic test cases:
+* Data cleaning: text normalization, deduplication, UTC timestamp parsing, price normalization.
+* Missing values: engagement weight handling, empty text fallback.
+* Sentiment: output ranges $[-1, 1]$, neutral text handling.
+* Aggregation: hourly and daily UTC boundaries.
+* Temporal integrity: anti-leakage checks, target correlation tests, monotonic time ordering.
+* Validation: expanding-window walk-forward execution, naive baseline comparison.
+* Financial metrics: Sharpe ratio, Sortino ratio, Max Drawdown, transaction cost deduction.
+* Database & utilities: SQLite table creation, repository roundtrips, demo data generation.
+
+---
+
+## ⚠️ Limitations & Disclaimers
+
+1. **Market Efficiency**: Sentiment signals exhibit regime-dependent predictive decay. Out-of-sample models should always be compared against naive zero-return baselines.
+2. **Engagement Lag**: Scraping APIs capture engagement metrics at collection time rather than publication time.
+3. **Execution Assumptions**: Backtest calculations assume fill at bar close and fixed 10 bps transaction costs without market impact or slippage modeling.
+4. **Educational Use**: This software is intended strictly for quantitative research and evaluation. It does not constitute investment advice.

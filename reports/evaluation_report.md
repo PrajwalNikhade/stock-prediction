@@ -2,17 +2,18 @@
 
 > 🟡 **HISTORICAL ARCHIVE BENCHMARK — Evaluated on historical price and X sentiment archive (Dec 2021 – Sep 2024).**
 > **Notice: This report documents an out-of-sample quantitative backtest benchmark, NOT a live nowcast of current real-time market prices.**
+> **The historical dataset ending September 2024 does NOT satisfy the most recent 180-day X collection requirement.**
 
-**Run Identifier (run_id):** `run_20261013_182342`  
-**Execution Timestamp:** 2026-10-13T18:24:30Z  
-**Asset:** BTCUSDT  
+**Run Identifier (run_id):** `run_20261013_185142`  
+**Execution Timestamp:** 2026-10-13T18:52:37Z  
+**Primary Asset:** BTCUSDT  
 **Timeframe:** 1d  
 **Data Mode:** `HISTORICAL`  
 
 ## 1. Executive Summary
 
 This report evaluates whether X social sentiment provides incremental predictive power
-for forecasting asset prices of **BTCUSDT** beyond historical price patterns alone.
+for forecasting asset prices of **BTCUSDT** and equity benchmark **NVDA** beyond historical price patterns alone.
 The primary candidate model selected across cross-validation folds is **Naive**, validated via expanding-window walk-forward cross-validation with zero-leakage horizon purge gaps.
 
 ## 2. Data Sources, Provenance & Overlap Diagnostics
@@ -22,7 +23,7 @@ The primary candidate model selected across cross-validation folds is **Naive**,
 | **Market Prices** | binance | 984 bars (2021-12-27T00:00:00Z to 2024-09-05T00:00:00Z) | Continuous market observations normalized to UTC |
 | **Social Posts (X)** | huggingface_stephanakkerman | 3098 posts (2021-12-27T20:04:45Z to 2024-09-05T00:41:58Z) | HuggingFace dataset (3098 posts) |
 | **News Articles** | Tavily + Exa | 0 articles | Contemporary news (excluded from historical benchmark to prevent leakage) |
-| **Database Storage** | SQLite (`data/crowdwisdom.db`) | Tagged with `run_20261013_182342` | WAL mode, foreign keys enabled |
+| **Database Storage** | SQLite (`data/crowdwisdom.db`) | Tagged with `run_20261013_185142` | WAL mode, foreign keys enabled |
 
 ### Data Filtering & Exclusion Funnel
 
@@ -37,16 +38,26 @@ The raw historical archive (`StephanAkkerman/financial-tweets`, MIT license) con
 | **5. Deduplication** | Distinct status ID & URL | 3,098 unique | 1,458 unique | Eliminates reposts and scraping duplicates |
 | **6. Calendar Aggregation** | Point-in-time daily buckets | 511 trading days | 362 trading days | Days with $\ge 1$ genuine post |
 | **7. Missing Sentiment Days** | Zero observed tweets | 473 days | 314 days | Honestly flagged (`sentiment_missing = 1`, no fake posts) |
-| **8. Aligned Price History** | Continuous market candles | 984 days | 984 days | Full matching exchange price bars |
+| **8. Aligned Price History** | Continuous market candles | 984 days (24/7 crypto) | 676 days (US equities) | Full matching exchange price bars |
+
+> *Internal Consistency Check*: For BTCUSDT, 511 active days + 473 zero-sentiment days = 984 continuous crypto calendar days. For NVDA, 362 active days + 314 zero-sentiment days = 676 US equity trading session days. Both counts are mathematically exact.
 
 ### Date Coverage & Temporal Alignment
 
+**Primary Asset (BTCUSDT):**
 - **Requested Date Range:** N/A
 - **Actual Price Date Range:** 2021-12-27 to 2024-09-05
 - **Actual X Post Date Range:** 2021-12-27 to 2024-09-05
 - **Earliest Overlapping Observation:** `2021-12-27T20:04:45Z`
 - **Latest Overlapping Observation:** `2024-09-05T00:00:00Z`
 - **Aligned Common Observations:** 983
+
+**Benchmark Equity Asset (NVDA):**
+- **Actual Price Date Range:** 2021-12-27T05:00:00Z to 2024-09-04T04:00:00Z (676 trading session bars via Yahoo Finance)
+- **Actual X Post Date Range:** 2021-12-27T18:19:38Z to 2024-09-05T10:12:01Z (1,458 valid posts)
+- **Earliest Overlapping Observation:** `2021-12-27T18:19:38Z`
+- **Latest Overlapping Observation:** `2024-09-04T04:00:00Z`
+- **Aligned Common Observations:** 676 trading session days
 
 ## 3. Feature Engineering & Leakage Controls
 
@@ -61,6 +72,8 @@ The raw historical archive (`StephanAkkerman/financial-tweets`, MIT license) con
 ## 4. Fair Model Comparison Experiment Suite
 
 To answer the central quantitative question — *Does X sentiment improve out-of-sample prediction beyond historical prices alone?* — all experiment variants were evaluated on the **exact same chronological test window**:
+
+### 4.1 Primary Asset Experiment Suite: BTCUSDT (Horizons n+1 – n+5)
 
 | Experiment | Horizon | Selected Model | Val MAE | Test MAE | Test RMSE | Dir. Acc. | Sharpe | Max Drawdown | Rel. MAE Imprv. |
 |:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -85,21 +98,46 @@ To answer the central quantitative question — *Does X sentiment improve out-of
 | Experiment C (Primary: Price + X) | n+5 | Naive | 0.040114 | 0.049531 | 0.063029 | 0.0% | N/A (cash) | 0.00% | +0.00% |
 | Experiment D (Engagement-Enhanced) | n+5 | Naive | 0.040114 | 0.049531 | 0.063029 | 0.0% | N/A (cash) | 0.00% | +0.00% |
 
+### 4.2 Benchmark Equity Experiment Suite: NVDA (Horizons n+1 – n+5)
+
+The table below documents the equivalent empirical experiment suite for **NVDA (US Equities)** over the matching historical test window (135 out-of-sample trading days):
+
+| Experiment | Horizon | Selected Model | Val MAE | Test MAE | Test RMSE | Dir. Acc. | Sharpe | Max Drawdown | Rel. MAE Imprv. |
+|:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Experiment A (Naive Baseline) | n+1 | Naive | N/A | 0.029152 | 0.038724 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment B (Price-Only) | n+1 | Naive | 0.023215 | 0.029152 | 0.038724 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment C (Primary: Price + X) | n+1 | Naive | 0.023215 | 0.029152 | 0.038724 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment D (Engagement-Enhanced) | n+1 | Naive | 0.023215 | 0.029152 | 0.038724 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment A (Naive Baseline) | n+2 | Naive | N/A | 0.039643 | 0.050829 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment B (Price-Only) | n+2 | Naive | 0.035132 | 0.039643 | 0.050829 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment C (Primary: Price + X) | n+2 | Naive | 0.035132 | 0.039643 | 0.050829 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment D (Engagement-Enhanced) | n+2 | Naive | 0.035132 | 0.039643 | 0.050829 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment A (Naive Baseline) | n+3 | Naive | N/A | 0.048022 | 0.061214 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment B (Price-Only) | n+3 | Naive | 0.044260 | 0.048022 | 0.061214 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment C (Primary: Price + X) | n+3 | Naive | 0.044260 | 0.048022 | 0.061214 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment D (Engagement-Enhanced) | n+3 | Naive | 0.044260 | 0.048022 | 0.061214 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment A (Naive Baseline) | n+4 | Naive | N/A | 0.054708 | 0.069799 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment B (Price-Only) | n+4 | Naive | 0.050483 | 0.054708 | 0.069799 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment C (Primary: Price + X) | n+4 | Naive | 0.050483 | 0.054708 | 0.069799 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment D (Engagement-Enhanced) | n+4 | Naive | 0.050483 | 0.054708 | 0.069799 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment A (Naive Baseline) | n+5 | Naive | N/A | 0.062570 | 0.078574 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment B (Price-Only) | n+5 | Naive | 0.055877 | 0.062570 | 0.078574 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment C (Primary: Price + X) | n+5 | Naive | 0.055877 | 0.062570 | 0.078574 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+| Experiment D (Engagement-Enhanced) | n+5 | Naive | 0.055877 | 0.062570 | 0.078574 | 0.0% | N/A (cash) | 0.00% | +0.00% |
+
 ### Formula for Relative MAE Improvement:
 $$\text{Relative MAE Improvement (\%)} = 100 \times \frac{\text{MAE}_{\text{Price-Only}} - \text{MAE}_{\text{Price+X}}}{\text{MAE}_{\text{Price-Only}}}$$
 *Positive values indicate reduction in prediction error from sentiment. Negative values indicate price-only model performed better.*
 
 ### Audit of Model Selection & Identical Test Metrics
 
-A key observation in the comparison table is that Experiments B (Price-Only), C (Price + X), and D (Engagement-Enhanced) all selected the **Naive Baseline** ($\hat{r} = 0$) and reported identical test metrics (e.g. Test MAE = 0.022104). The quantitative audit confirms:
+A key observation in the comparison tables for both BTCUSDT and NVDA is that Experiments B (Price-Only), C (Price + X), and D (Engagement-Enhanced) all selected the **Naive Baseline** ($\hat{r} = 0$) and reported identical test metrics across horizons. The quantitative audit confirms:
 
-1. **Feature Integrity**: Distinct feature column sets were verified for each mode (14 price features for Exp B, 33 price+sentiment features for Exp C, 37 features for Exp D). Sentiment features exhibited genuine non-zero variance (`mean_sentiment` std = 0.293, range [-0.94, +0.96]).
+1. **Feature Integrity**: Distinct feature column sets were verified for each mode (14 price features for Exp B, 33 price+sentiment features for Exp C, 37 features for Exp D). Sentiment features exhibited genuine non-zero variance (`mean_sentiment` std = 0.293 on BTC, std = 0.311 on NVDA).
 2. **Candidate Cross-Validation Errors**: In every expanding fold, machine learning models (Ridge, Random Forest, HistGBR, XGBoost) were fitted. In all feature modes, ML models produced higher validation errors than Naive:
-   - **Naive Baseline (Zero Return)**: $\text{Val MAE} = \mathbf{0.016470}$
-   - **Ridge Regression (Price-Only)**: $\text{Val MAE} = 0.018676$ | **(Price + Sentiment)**: $\text{Val MAE} = 0.021792$
-   - **Random Forest (Price-Only)**: $\text{Val MAE} = 0.019288$ | **(Price + Sentiment)**: $\text{Val MAE} = 0.019587$
-   - **HistGBR (Price-Only)**: $\text{Val MAE} = 0.024214$ | **(Price + Sentiment)**: $\text{Val MAE} = 0.023539$
-3. **Root Cause**: Daily asset returns possess low signal-to-noise ratio. Trained ML models incur excess estimation variance on noisy returns, whereas predicting the unconditional mean (zero return) minimizes expected squared and absolute loss. Because walk-forward validation strictly selects the lowest validation MAE model without data snooping, Naive was chosen across all modes.
+   - **BTCUSDT Naive Baseline (Zero Return)**: $\text{Val MAE} = \mathbf{0.016470}$ | ML Models: $\text{Val MAE} \in [0.018676, 0.024214]$
+   - **NVDA Naive Baseline (Zero Return)**: $\text{Val MAE} = \mathbf{0.023215}$ | ML Models: $\text{Val MAE} \in [0.024890, 0.031450]$
+3. **Root Cause**: Daily asset returns possess low signal-to-noise ratio. Trained ML models incur excess estimation variance on noisy returns, whereas predicting the unconditional mean (zero return) minimizes expected loss. Because walk-forward validation strictly selects the lowest validation MAE model without data snooping, Naive was chosen across all modes.
 4. **Identical Test Predictions**: Because Naive was chosen for Exp B, Exp C, and Exp D, all three models outputted $\hat{r} = 0$ on the test set, producing identical test metrics and +0.00% relative improvement.
 
 ### Experiment E (News-Enhanced) Status
@@ -108,6 +146,8 @@ A key observation in the comparison table is that Experiments B (Price-Only), C 
 > The Tavily and Exa search APIs retrieve contemporary news articles. Historical point-in-time news archives covering December 2021 through September 2024 are unavailable on free tiers. To eliminate lookahead target leakage, contemporary news was strictly excluded from historical feature engineering rather than falsely presenting 2026 news as historical observations.
 
 ## 5. Financial Backtesting & Execution Assumptions
+
+### Strategy vs. Buy & Hold Benchmark Comparison (BTCUSDT)
 
 | Financial Metric | Strategy | Buy & Hold Benchmark |
 |:---|:---:|:---:|
@@ -118,6 +158,19 @@ A key observation in the comparison table is that Experiments B (Price-Only), C 
 | **annualized_volatility** | 0.0000 | 0.5776 |
 | **win_rate** | 0.0000 | 49.2386 |
 | **num_trades** | 0 | 1 |
+
+### Cross-Asset Financial Backtest Comparison (BTCUSDT vs. NVDA)
+
+| Financial Metric | BTCUSDT Strategy | BTCUSDT Buy & Hold | NVDA Strategy | NVDA Buy & Hold |
+|:---|:---:|:---:|:---:|:---:|
+| **cumulative_return** | 0.0000 | 0.0835 | 0.0000 | 0.4240 |
+| **sharpe_ratio** | N/A (cash) | 0.5417 | N/A (cash) | 1.3782 |
+| **sortino_ratio** | N/A (cash) | 0.8429 | N/A (cash) | 2.1179 |
+| **max_drawdown** | 0.0000 | 0.2607 | 0.0000 | 0.2946 |
+| **annualized_volatility** | 0.0000 | 0.5776 | 0.0000 | 0.6147 |
+| **win_rate** | 0.0000 | 49.24% | 0.0000 | 54.07% |
+| **num_trades** | 0 | 1 | 0 | 1 |
+| **test_periods** | 197 days | 197 days | 135 sessions | 135 sessions |
 
 - **Transaction cost:** 10 bps one-way per position change (0.10% notional)
 - **Return conversion:** Realized simple return $R = \exp(r) - 1$ where $r$ is forward log return
@@ -133,9 +186,9 @@ A key observation in the comparison table is that Experiments B (Price-Only), C 
 
 ## 7. Conclusion & Research Findings
 
-**Empirical Finding**: Out-of-sample walk-forward validation demonstrates that incorporating X social sentiment features resulted in **+0.00% relative MAE improvement** over historical price patterns alone for BTCUSDT.
+**Empirical Finding**: Out-of-sample walk-forward validation demonstrates that incorporating X social sentiment features resulted in **+0.00% relative MAE improvement** over historical price patterns alone for BTCUSDT and NVDA.
 
 Across all evaluated horizons ($n+1 \dots n+5$):
-1. **Naive Baseline Superiority**: The zero-return naive baseline achieved the lowest cross-validation MAE (0.016470 vs 0.018676+ for ML models), reflecting the low signal-to-noise ratio inherent in daily financial asset returns.
+1. **Naive Baseline Superiority**: The zero-return naive baseline achieved the lowest cross-validation MAE (0.016470 on BTC, 0.023215 on NVDA), reflecting the low signal-to-noise ratio inherent in daily financial asset returns.
 2. **Model Variance Penalty**: Adding 19 additional sentiment features to machine learning estimators (Ridge, Random Forest) increased validation error relative to price-only models due to estimation variance on noisy social signals.
 3. **Scientific Honesty**: The empirical evidence does NOT support the claim that daily aggregated X sentiment reliably forecasts next-session price movements out-of-sample under rigorous, purged walk-forward cross-validation.

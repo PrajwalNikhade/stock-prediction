@@ -1,4 +1,12 @@
-"""Sentiment outlook report generator for CrowdWisdomTrading."""
+"""Sentiment outlook report generator for CrowdWisdomTrading.
+
+Aggregation definitions (for consistency with aggregation.py):
+  - Overall sentiment: arithmetic mean of mean_sentiment across ALL periods.
+  - Positive/negative/neutral %: average of per-period ratios across ALL periods.
+  - Net sentiment score: (positive_ratio - negative_ratio) averaged across ALL periods.
+  - Engagement-weighted sentiment: arithmetic mean of engagement_weighted_sentiment across ALL periods.
+  - Trend: comparison of last 3 periods vs the prior 3 periods.
+"""
 
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +27,13 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
     is_demo = data_source == "demo"
     prov = provenance or {}
 
+    is_historical = data_source in ("historical", "historical_benchmark")
+
     lines = []
-    lines.append(f"# Current Sentiment Outlook: {asset}")
+    if is_historical:
+        lines.append(f"# Historical Sentiment Archive Report: {asset}")
+    else:
+        lines.append(f"# Current Sentiment Outlook: {asset}")
     lines.append("")
     if is_demo:
         lines.append("> ⚠️ **DEMO MODE — NO VERIFIED LIVE DATA (Synthetic Fixtures)**")
@@ -29,9 +42,10 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
         lines.append("> ℹ️ **PARTIAL LIVE DATA — Live market prices and news active; social X scraper quota reached (0 live posts).**")
         lines.append("> *No synthetic data substituted. All metrics strictly reflect actual observations.*")
         lines.append("")
-    elif data_source in ("historical", "historical_benchmark"):
+    elif is_historical:
         lines.append("> 🟡 **HISTORICAL ARCHIVE BENCHMARK — Evaluated on historical price and X sentiment archive (Dec 2021 – Sep 2024).**")
-        lines.append("> *Notice: This report presents historical out-of-sample backtest metrics, NOT a live nowcast of current real-time market prices.*")
+        lines.append("> *This report presents historical archive metrics, NOT a live nowcast of current real-time market prices.*")
+        lines.append("> *The historical dataset ending September 2024 does NOT satisfy the most recent 180-day X collection requirement.*")
         lines.append("")
     else:
         lines.append("> 🟢 **LIVE DATA — VERIFIED CURRENT MARKET & RECENTLY SCRAPED X POSTS**")
@@ -43,56 +57,84 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
     # Data coverage
     lines.append("## Data Coverage")
     if price_df is not None and not price_df.empty:
+        price_min = price_df['timestamp_utc'].min()
+        price_max = price_df['timestamp_utc'].max()
         lines.append(f"- **Price observations:** {len(price_df)}")
-        lines.append(f"- **Date range:** {price_df['timestamp_utc'].min()} to {price_df['timestamp_utc'].max()}")
+        lines.append(f"- **Date range:** {price_min} to {price_max}")
         last_close = price_df['close'].iloc[-1]
-        lines.append(f"- **Last close price:** {last_close:,.2f}")
+        if is_historical:
+            lines.append(f"- **Final archive close price:** {last_close:,.2f} *(historical, not current market price)*")
+        else:
+            lines.append(f"- **Last close price:** {last_close:,.2f}")
     else:
         lines.append("- Price data: Not available")
         last_close = None
     lines.append("")
 
     # Sentiment summary
-    lines.append("## X Sentiment Summary")
+    if is_historical:
+        lines.append("## Historical X Sentiment Summary")
+    else:
+        lines.append("## X Sentiment Summary")
     if sentiment_df is not None and not sentiment_df.empty:
         n_posts = int(sentiment_df['post_count'].sum()) if 'post_count' in sentiment_df.columns else len(sentiment_df)
-        lines.append(f"- **Total relevant posts:** {n_posts}")
+        n_periods = len(sentiment_df)
+        lines.append(f"- **Total relevant posts:** {n_posts} across {n_periods} aggregation periods")
 
         if 'mean_sentiment' in sentiment_df.columns:
-            recent = sentiment_df.tail(5)
-            avg_sent = recent['mean_sentiment'].mean()
-            if avg_sent > 0.05:
+            # Overall sentiment: arithmetic mean across ALL periods (not a tail subset)
+            overall_sent = sentiment_df['mean_sentiment'].mean()
+            if overall_sent > 0.05:
                 classification = "**Bullish** 📈"
-            elif avg_sent < -0.05:
+            elif overall_sent < -0.05:
                 classification = "**Bearish** 📉"
             else:
                 classification = "**Neutral** ➡️"
-            lines.append(f"- **Overall sentiment:** {classification}")
-            lines.append(f"- **Recent net sentiment score:** {avg_sent:.4f}")
+            lines.append(f"- **Overall sentiment (all-period mean):** {classification} ({overall_sent:.4f})")
 
+        # Positive/negative/neutral ratios: mean across ALL periods
         if 'positive_ratio' in sentiment_df.columns:
-            last = sentiment_df.iloc[-1]
-            lines.append(f"- **Positive:** {last.get('positive_ratio', 0)*100:.1f}%")
-            lines.append(f"- **Negative:** {last.get('negative_ratio', 0)*100:.1f}%")
-            lines.append(f"- **Neutral:** {last.get('neutral_ratio', 0)*100:.1f}%")
+            avg_pos = sentiment_df['positive_ratio'].mean()
+            avg_neg = sentiment_df['negative_ratio'].mean()
+            avg_neu = sentiment_df['neutral_ratio'].mean()
+            lines.append(f"- **Positive (period-average):** {avg_pos*100:.1f}%")
+            lines.append(f"- **Negative (period-average):** {avg_neg*100:.1f}%")
+            lines.append(f"- **Neutral (period-average):** {avg_neu*100:.1f}%")
 
+        # Net sentiment score: mean of (positive_ratio - negative_ratio) across all periods
+        if 'net_sentiment' in sentiment_df.columns:
+            avg_net = sentiment_df['net_sentiment'].mean()
+            lines.append(f"- **Net sentiment score (all-period mean):** {avg_net:.4f}")
+
+        # Engagement-weighted sentiment: mean across ALL periods
         if 'engagement_weighted_sentiment' in sentiment_df.columns:
-            ews = sentiment_df['engagement_weighted_sentiment'].iloc[-1]
-            lines.append(f"- **Engagement-weighted sentiment:** {ews:.4f}")
+            ews_mean = sentiment_df['engagement_weighted_sentiment'].mean()
+            lines.append(f"- **Engagement-weighted sentiment (all-period mean):** {ews_mean:.4f}")
 
-        # Trend
-        if len(sentiment_df) >= 5:
+        # Trend: compare last 3 periods vs prior 3 periods (6 periods required)
+        if len(sentiment_df) >= 6:
             recent_avg = sentiment_df['mean_sentiment'].tail(3).mean()
             prior_avg = sentiment_df['mean_sentiment'].iloc[-6:-3].mean()
             if recent_avg > prior_avg + 0.02:
-                lines.append("- **Trend:** Sentiment improving ↗️")
+                lines.append("- **Trend (last 3 vs prior 3 periods):** Sentiment improving ↗️")
             elif recent_avg < prior_avg - 0.02:
-                lines.append("- **Trend:** Sentiment declining ↘️")
+                lines.append("- **Trend (last 3 vs prior 3 periods):** Sentiment declining ↘️")
             else:
-                lines.append("- **Trend:** Sentiment stable →")
+                lines.append("- **Trend (last 3 vs prior 3 periods):** Sentiment stable →")
     else:
         lines.append("- No sentiment data available")
+        if is_historical:
+            lines.append("- *Historical archive did not contain sufficient posts for this asset.*")
     lines.append("")
+
+    # Current X data status (Task 4 — never substitute old data as current)
+    if is_historical:
+        lines.append("## Current X Sentiment Status")
+        lines.append("")
+        lines.append("> ⚠️ **Current X sentiment cannot be determined from the available dataset.**")
+        lines.append("> The historical archive covers December 2021 through September 2024. No authorized, free API is available for continuous recent X post collection (X API v2 read access requires $100/month minimum since July 2023).")
+        lines.append("> The metrics above reflect *archived historical sentiment only* and must not be interpreted as current market sentiment.")
+        lines.append("")
 
     # News
     lines.append("## Recent News")
@@ -120,7 +162,13 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
     lines.append("")
 
     # Forecast
-    lines.append("## Forecast Summary")
+    if is_historical:
+        lines.append("## Historical Forecast Summary")
+        lines.append("")
+        lines.append("> *These forecasts are based on the final historical observation in the archive. They do not predict current or future prices.*")
+        lines.append("")
+    else:
+        lines.append("## Forecast Summary")
     if forecasts:
         lines.append("| Horizon | Predicted Price | Predicted Return | Status |")
         lines.append("|---------|---------------:|------------------:|--------|")
@@ -145,6 +193,9 @@ def generate_sentiment_outlook(asset: str, price_df, sentiment_df, news_df,
     lines.append("- **This is not financial advice.** Past performance does not guarantee future results.")
     if is_demo:
         lines.append("- **This report uses synthetic demo data and does not reflect real market conditions.**")
+    if is_historical:
+        lines.append("- **Historical archive limitation:** The dataset ends September 2024 and does NOT satisfy a rolling 180-day recent collection requirement.")
+        lines.append("- **No current X sentiment available:** Prices and sentiment shown are archival, not real-time.")
     lines.append("")
 
     content = "\n".join(lines)

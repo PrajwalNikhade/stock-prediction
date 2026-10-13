@@ -139,8 +139,26 @@ def test_apify_connection(actor_id: str = None, query: str = "BTC", max_items: i
                 "error": f"Actor {actor_id} completed but returned 0 items for '{query}'",
             }
 
+        if any(isinstance(x, dict) and x.get("noResults") for x in raw_items):
+            return {
+                "success": False,
+                "configured": True,
+                "actor_id": actor_id,
+                "items_retrieved": 0,
+                "error": f"Actor {actor_id} returned noResults (actor monthly limit exceeded on Apify plan)",
+            }
+
         df = _normalize_posts(raw_items, asset_ticker=query)
-        sample = df.iloc[0].to_dict() if not df.empty else {}
+        if df.empty:
+            return {
+                "success": False,
+                "configured": True,
+                "actor_id": actor_id,
+                "items_retrieved": 0,
+                "error": f"Actor {actor_id} returned no valid post text for '{query}'",
+            }
+
+        sample = df.iloc[0].to_dict()
         sample.pop("raw_json", None)
 
         return {
@@ -149,8 +167,8 @@ def test_apify_connection(actor_id: str = None, query: str = "BTC", max_items: i
             "actor_id": actor_id,
             "items_retrieved": len(df),
             "sample_post": sample,
-            "earliest_ts": str(df["timestamp_utc"].min()) if not df.empty else None,
-            "latest_ts": str(df["timestamp_utc"].max()) if not df.empty else None,
+            "earliest_ts": str(df["timestamp_utc"].min()),
+            "latest_ts": str(df["timestamp_utc"].max()),
             "error": None,
         }
     except Exception as e:
@@ -270,7 +288,7 @@ def _normalize_posts(raw_posts: list[dict], asset_ticker: str) -> pd.DataFrame:
     records = []
 
     for post in raw_posts:
-        if not isinstance(post, dict):
+        if not isinstance(post, dict) or post.get("noResults"):
             continue
 
         # Post ID

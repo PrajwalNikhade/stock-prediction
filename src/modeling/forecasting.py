@@ -19,7 +19,8 @@ from src.utils.time_utils import format_utc, utc_now
 def generate_forecasts(feature_df: pd.DataFrame, models: dict,
                        scalers: dict, asset: str, timeframe: str,
                        reference_price: float = None,
-                       reference_timestamp: str = None) -> list[dict]:
+                       reference_timestamp: str = None,
+                       asset_class: str = None) -> list[dict]:
     """Generate 6-horizon forecast matrix.
 
     Args:
@@ -30,6 +31,7 @@ def generate_forecasts(feature_df: pd.DataFrame, models: dict,
         timeframe: '1h' or '1d'
         reference_price: last observed close price
         reference_timestamp: timestamp of last observed bar
+        asset_class: asset class ('crypto', 'us_equities', etc.)
 
     Returns:
         List of 6 forecast dicts (n+0 through n+5)
@@ -50,11 +52,20 @@ def generate_forecasts(feature_df: pd.DataFrame, models: dict,
     if reference_timestamp is None:
         reference_timestamp = str(last_row["timestamp_utc"].iloc[0])
 
-    # Time delta per horizon step
-    if timeframe == "1h":
-        delta = timedelta(hours=1)
+    # Determine if asset is equity vs 24/7 crypto
+    is_equity = False
+    if asset_class:
+        is_equity = asset_class.lower() in ["equity", "us_equities", "stock", "etf", "index", "commodity"]
     else:
-        delta = timedelta(days=1)
+        try:
+            from config.settings import get_asset_by_ticker
+            cfg = get_asset_by_ticker(asset)
+            if cfg and cfg.get("asset_class", "").lower() in ["equity", "us_equities", "stock", "etf", "index", "commodity"]:
+                is_equity = True
+            elif cfg and cfg.get("provider") == "yfinance":
+                is_equity = True
+        except Exception:
+            is_equity = False
 
     ref_ts = pd.Timestamp(reference_timestamp)
     forecast_origin = format_utc(utc_now())
@@ -62,7 +73,18 @@ def generate_forecasts(feature_df: pd.DataFrame, models: dict,
     forecasts = []
 
     for h in range(6):
-        target_ts = ref_ts + h * delta
+        if h == 0:
+            target_ts = ref_ts
+        else:
+            if timeframe == "1h":
+                target_ts = ref_ts + timedelta(hours=h)
+            else:
+                if is_equity:
+                    # Valid trading session: advance by business days (BDay) skipping non-trading weekend days
+                    target_ts = ref_ts + h * pd.tseries.offsets.BDay()
+                else:
+                    target_ts = ref_ts + timedelta(days=h)
+
         horizon_label = f"n+{h}"
 
         if h == 0:

@@ -13,6 +13,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 import numpy as np
 import pandas as pd
@@ -112,11 +114,14 @@ def run_pipeline(
         # 2. Collect X posts via Apify (small test run first as required)
         logger.info("Testing Apify Actor connection with a small sample test run...")
         search_terms = asset_cfg.get("search_terms", [ticker])
-        test_run = test_apify_connection(query=search_terms[0], max_items=2)
+        test_query = asset_cfg.get("name") or (search_terms[0] if search_terms else ticker)
+        test_run = test_apify_connection(query=test_query, max_items=2)
 
         if test_run["success"]:
             logger.info("Apify test run successful (%d items). Proceeding to collect live posts...", test_run["items_retrieved"])
-            posts_df = collect_posts(ticker, search_terms, max_items=200)
+            # Query top relevant terms for the asset to retrieve live posts
+            selected_terms = [t for t in search_terms if len(t) > 2][:3] or [test_query]
+            posts_df = collect_posts(ticker, selected_terms, max_items=50)
             apify_status_msg = f"Live retrieved ({len(posts_df)} posts)"
             repo.log_ingestion_run({
                 "asset": ticker,

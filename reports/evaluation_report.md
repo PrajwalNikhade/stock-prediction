@@ -3,8 +3,8 @@
 > ℹ️ **PARTIAL DATA REPORT — Market prices and news were retrieved from live external APIs, but social sentiment data was uncollected (Apify 401/unconfigured).**
 > **Features were constructed with missing-sentiment flags (`sentiment_missing = 1`). No synthetic data was fabricated.**
 
-**Run Identifier (run_id):** `run_20261013_144259`  
-**Generated:** 2026-10-13T14:43:09Z  
+**Run Identifier (run_id):** `run_20261013_164832`  
+**Generated:** 2026-10-13T16:49:02Z  
 **Asset:** BTCUSDT  
 **Timeframe:** 1d  
 
@@ -19,7 +19,7 @@ The selected model is **Naive** based on expanding-window walk-forward validatio
 | Pipeline Component | Source / Provider | Records / Observations | Status & Provenance Details |
 |---------------------|-------------------|------------------------|-----------------------------|
 | **Market Prices** | binance | 180 bars (2026-04-17T00:00:00Z to 2026-10-13T00:00:00Z) | Live exchange REST API (Binance public klines) |
-| **Social Posts (X)** | Apify (`apidojo/tweet-scraper`) | 0 posts (N/A (No posts collected)) | Failed (Invalid API token (HTTP 401 Unauthorized)) (0 synthetic posts injected) |
+| **Social Posts (X)** | Apify (`apidojo/tweet-scraper`) | 0 posts (N/A (No posts collected)) | Live retrieved (0 posts) (0 synthetic posts injected) |
 | **News Feeds** | Tavily Search + Exa AI | 20 articles | Live search feeds retrieved and deduplicated |
 | **Database Storage** | SQLite (`data/crowdwisdom.db`) | Tagged with `run_id` | WAL mode, foreign keys, point-in-time provenance |
 
@@ -59,22 +59,22 @@ The selected model is **Naive** based on expanding-window walk-forward validatio
 
 | Metric | Best Model (Naive) | Naive Baseline |
 |--------|--------------------------|----------------|
-| mae | 0.012596 | 0.012596 |
-| rmse | 0.019252 | 0.019252 |
-| r_squared | -0.006769 | -0.006769 |
+| mae | 0.012510 | 0.012510 |
+| rmse | 0.019157 | 0.019157 |
+| r_squared | -0.006112 | -0.006112 |
 | directional_accuracy | 0.000000 | 0.000000 |
 | smape | 200.000000 | 200.000000 |
-| prediction_bias | -0.001579 | -0.001579 |
+| prediction_bias | -0.001493 | -0.001493 |
 
 ## Financial Performance
 
 | Metric | Strategy | Buy & Hold |
 |--------|----------|------------|
-| cumulative_return | 0.0000 | 0.0516 |
-| sharpe_ratio | N/A (flat cash) | 1.2878 |
-| sortino_ratio | N/A (flat cash) | 2.3699 |
+| cumulative_return | 0.0000 | 0.0484 |
+| sharpe_ratio | N/A (flat cash) | 1.2237 |
+| sortino_ratio | N/A (flat cash) | 2.2416 |
 | max_drawdown | 0.0000 | 0.0573 |
-| annualized_volatility | 0.0000 | 0.3089 |
+| annualized_volatility | 0.0000 | 0.3075 |
 | win_rate | 0.0000 | 52.7778 |
 | num_trades | 0 | 0 |
 

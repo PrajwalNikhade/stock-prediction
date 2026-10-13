@@ -757,6 +757,51 @@ def test_provenance_and_run_id_persistence(temp_db_path, sample_price_df):
     assert runs.iloc[0]["data_mode"] == "partial"
 
 
+def test_equity_trading_session_timestamps(sample_price_df):
+    from src.modeling.forecasting import generate_forecasts
+    from src.processing.feature_engineering import build_features
+
+    features = build_features(sample_price_df, pd.DataFrame(), "1d")
+    # Friday reference timestamp
+    friday_ts = "2026-10-09T00:00:00Z"
+    ref_price = 150.0
+
+    # Equity forecast (should advance by business days, skipping weekend)
+    equity_forecasts = generate_forecasts(
+        feature_df=features,
+        models={},
+        scalers={},
+        asset="AAPL",
+        timeframe="1d",
+        reference_price=ref_price,
+        reference_timestamp=friday_ts,
+        asset_class="equity",
+    )
+    assert len(equity_forecasts) == 6
+    assert equity_forecasts[0]["horizon"] == 0
+    assert "2026-10-09" in equity_forecasts[0]["target_timestamp"]
+    # n+1 must be Monday (2026-10-12), not Saturday!
+    assert "2026-10-12" in equity_forecasts[1]["target_timestamp"]
+    # n+2 must be Tuesday (2026-10-13)
+    assert "2026-10-13" in equity_forecasts[2]["target_timestamp"]
+
+    # Crypto forecast (24/7 trading: Friday advances to Saturday)
+    crypto_forecasts = generate_forecasts(
+        feature_df=features,
+        models={},
+        scalers={},
+        asset="BTCUSDT",
+        timeframe="1d",
+        reference_price=65000.0,
+        reference_timestamp=friday_ts,
+        asset_class="crypto",
+    )
+    assert len(crypto_forecasts) == 6
+    assert "2026-10-09" in crypto_forecasts[0]["target_timestamp"]
+    # n+1 must be Saturday (2026-10-10)
+    assert "2026-10-10" in crypto_forecasts[1]["target_timestamp"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

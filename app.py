@@ -37,6 +37,7 @@ from src.processing.data_cleaning import (
 from src.processing.sentiment import process_posts_sentiment, analyze_news_sentiment
 from src.processing.aggregation import aggregate_sentiment
 from src.processing.feature_engineering import build_features, create_targets, get_feature_columns
+from src.ingestion.price_providers import fetch_price_data
 from src.ingestion.dataset_importer import (
     import_historical_x_csv,
     extract_huggingface_posts,
@@ -98,6 +99,9 @@ def get_data_mode() -> str:
     """Return explicit data mode label."""
     if st.session_state.get("demo_mode", False):
         return "DEMO DATA"
+    source = st.session_state.get("data_source", "")
+    if source in ("historical", "huggingface", "csv_historical", "historical_benchmark"):
+        return "HISTORICAL ARCHIVE"
     has_price = not st.session_state.price_df.empty
     has_posts = not st.session_state.posts_df.empty
     if has_price and has_posts:
@@ -105,140 +109,6 @@ def get_data_mode() -> str:
     elif has_price or has_posts:
         return "PARTIAL DATA"
     return "NO DATA"
-
-# ─── Sidebar ─────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("📊 CrowdWisdomTrading")
-    st.caption("X Sentiment Price Prediction")
-
-    # Asset selection
-    assets = get_all_assets()
-    asset_classes = {}
-    for a in assets:
-        cls = a["asset_class"].replace("_", " ").title()
-        if cls not in asset_classes:
-            asset_classes[cls] = []
-        asset_classes[cls].append(a)
-
-    selected_class = st.selectbox("Asset Class", list(asset_classes.keys()))
-    class_assets = asset_classes[selected_class]
-    asset_options = {f"{a['name']} ({a['ticker']})": a['ticker'] for a in class_assets}
-    selected_label = st.selectbox("Asset", list(asset_options.keys()))
-    selected_ticker = asset_options[selected_label]
-    asset_config = get_asset_by_ticker(selected_ticker)
-
-    # Timeframe
-    timeframe = st.selectbox("Timeframe", ["1d", "1h"], format_func=lambda x: "Daily" if x == "1d" else "Hourly")
-
-    # Settings
-    st.divider()
-    history_days = st.number_input("History (days)", 30, 365, HISTORY_DAYS)
-    transaction_cost = st.number_input("Transaction cost (bps)", 0, 100, TRANSACTION_COST_BPS)
-
-    # API & Provider Status
-    st.divider()
-    st.subheader("Provider & Auth Status")
-    st.caption("🟢 Binance: Public Price Feed")
-    st.caption("🟡 Yahoo Finance: Public Price Feed")
-
-    from src.ingestion.apify_client import verify_credentials as verify_apify
-    ap_stat = verify_apify()
-    if ap_stat["valid"]:
-        st.caption(f"✅ Apify X: Active (@{ap_stat.get('username')})")
-    elif ap_stat["configured"]:
-        st.caption(f"❌ Apify X: Auth Failed (401)")
-    else:
-        st.caption("⚠️ Apify X: Token Missing (.env)")
-
-    status = api_status()
-    st.caption(f"{'✅' if status['tavily'] else '⚠️'} Tavily News: {'Active' if status['tavily'] else 'Key Missing'}")
-    st.caption(f"{'✅' if status['exa'] else '⚠️'} Exa Neural: {'Active' if status['exa'] else 'Key Missing'}")
-
-    st.divider()
-    # Data Mode Badge
-    current_mode = get_data_mode()
-    if current_mode == "LIVE DATA":
-        st.success("Mode: 🟢 LIVE DATA")
-    elif current_mode == "PARTIAL DATA":
-        st.warning("Mode: 🟡 PARTIAL DATA")
-    elif current_mode == "DEMO DATA":
-        st.info("Mode: 🔵 DEMO DATA")
-    else:
-        st.caption("Mode: ⚪ NO DATA LOADED")
-
-    st.divider()
-
-    # Action buttons
-    if st.button("🔄 Start Ingestion", use_container_width=True):
-        _run_ingestion(selected_ticker, asset_config, timeframe, history_days)
-
-    if st.button("🧪 Use Demo Data", use_container_width=True):
-        _run_demo(selected_ticker, timeframe, history_days)
-
-    if st.button("🤖 Train & Validate", use_container_width=True):
-        _run_training(selected_ticker, timeframe, transaction_cost)
-
-    if st.button("📈 Generate Forecasts", use_container_width=True):
-        _run_forecasting(selected_ticker, timeframe)
-
-    if st.button("📄 Generate Reports", use_container_width=True):
-        _run_reporting(selected_ticker, timeframe)
-
-    st.divider()
-    with st.expander("📁 Historical X Importer (CSV/HF)"):
-        st.caption("Import genuine historical X posts for fair empirical evaluation.")
-        uploaded_csv = st.file_uploader("Upload X Posts CSV", type=["csv"], key="sidebar_csv")
-        if uploaded_csv is not None:
-            if st.button("📥 Process Uploaded CSV", use_container_width=True):
-                raw_text = uploaded_csv.getvalue().decode("utf-8", errors="ignore")
-                posts = import_historical_x_csv(raw_text, asset=selected_ticker, source_label="csv_import")
-                if not posts.empty:
-                    posts, _ = deduplicate_posts(posts)
-                    posts = validate_timestamps(posts)
-                    posts = filter_empty_text(posts)
-                    proc = process_posts_sentiment(posts, use_transformer=False)
-                    agg = aggregate_sentiment(proc, timeframe, selected_ticker)
-                    repo.save_raw_posts(posts)
-                    repo.save_processed_posts(proc)
-                    if not agg.empty:
-                        repo.save_sentiment_aggregates(agg)
-                    st.session_state.posts_df = posts
-                    st.session_state.processed_posts = proc
-                    st.session_state.sentiment_agg = agg
-                    st.session_state.data_source = "csv_historical"
-                    st.session_state.demo_mode = False
-                    st.success(f"Imported {len(posts)} genuine posts from CSV!")
-                    st.rerun()
-
-        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
-        if hf_parquet.exists():
-            if st.button("📦 Load StephanAkkerman Dataset (MIT)", use_container_width=True):
-                with st.spinner("Extracting asset posts and aligning prices..."):
-                    posts = extract_huggingface_posts(hf_parquet, asset=selected_ticker, max_posts=5000)
-                    if not posts.empty:
-                        t_min = str(posts["timestamp_utc"].min())[:10]
-                        t_max = str(posts["timestamp_utc"].max())[:10]
-                        p_df = fetch_price_data(asset_config, timeframe, start_date=t_min, end_date=t_max)
-                        if not p_df.empty:
-                            p_df = normalize_price_data(p_df)
-                            repo.save_price_bars(p_df)
-                            st.session_state.price_df = p_df
-                        posts, _ = deduplicate_posts(posts)
-                        posts = validate_timestamps(posts)
-                        proc = process_posts_sentiment(posts, use_transformer=False)
-                        agg = aggregate_sentiment(proc, timeframe, selected_ticker)
-                        repo.save_raw_posts(posts)
-                        repo.save_processed_posts(proc)
-                        if not agg.empty:
-                            repo.save_sentiment_aggregates(agg)
-                        st.session_state.posts_df = posts
-                        st.session_state.processed_posts = proc
-                        st.session_state.sentiment_agg = agg
-                        st.session_state.data_source = "huggingface"
-                        st.session_state.demo_mode = False
-                        st.success(f"Loaded {len(posts)} genuine posts aligned with price history!")
-                        st.rerun()
-
 
 # ─── Helper Functions ────────────────────────────────────────────────────
 def _run_ingestion(ticker, config, timeframe, days):
@@ -378,7 +248,59 @@ def _run_demo(ticker, timeframe, days):
     st.rerun()
 
 
-def _run_training(ticker, timeframe, tc_bps):
+def _load_benchmark_data(ticker, timeframe, tc_bps):
+    """Load genuine historical benchmark data from SQLite and evaluate."""
+    p_df = repo.get_price_bars(ticker, timeframe)
+    if p_df.empty:
+        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
+        if hf_parquet.exists():
+            posts = extract_huggingface_posts(hf_parquet, asset=ticker, max_posts=5000)
+            if not posts.empty:
+                t_min = str(posts["timestamp_utc"].min())[:10]
+                t_max = str(posts["timestamp_utc"].max())[:10]
+                cfg = get_asset_by_ticker(ticker) or {}
+                from src.ingestion.price_providers import fetch_price_data
+                p_df = fetch_price_data(cfg, timeframe, start_date=t_min, end_date=t_max)
+                if not p_df.empty:
+                    p_df = normalize_price_data(p_df)
+                    repo.save_price_bars(p_df)
+    if p_df.empty:
+        st.error(f"No historical price bars available for {ticker} ({timeframe}).")
+        return
+
+    st.session_state.price_df = p_df
+    posts = repo.get_raw_posts(ticker)
+    if posts.empty:
+        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
+        if hf_parquet.exists():
+            posts = extract_huggingface_posts(hf_parquet, asset=ticker, max_posts=5000)
+            if not posts.empty:
+                posts, _ = deduplicate_posts(posts)
+                posts = validate_timestamps(posts)
+                repo.save_raw_posts(posts)
+    st.session_state.posts_df = posts
+
+    proc = repo.get_processed_posts(ticker)
+    if proc.empty and not posts.empty:
+        proc = process_posts_sentiment(posts, use_transformer=False)
+        repo.save_processed_posts(proc)
+    st.session_state.processed_posts = proc
+
+    agg = repo.get_sentiment_aggregates(ticker, timeframe)
+    if agg.empty and not proc.empty:
+        agg = aggregate_sentiment(proc, timeframe, ticker)
+        repo.save_sentiment_aggregates(agg)
+    st.session_state.sentiment_agg = agg
+
+    st.session_state.news_df = pd.DataFrame()
+    st.session_state.data_source = "historical"
+    st.session_state.demo_mode = False
+
+    _run_training(ticker, timeframe, tc_bps, rerun=False)
+    _run_forecasting(ticker, timeframe)
+
+
+def _run_training(ticker, timeframe, tc_bps, rerun=True):
     """Run training and fair multi-variant experiment comparison suite."""
     price_df = st.session_state.price_df
     sentiment_agg = st.session_state.sentiment_agg
@@ -444,7 +366,8 @@ def _run_training(ticker, timeframe, tc_bps):
             st.warning("Insufficient test data for backtest")
 
     st.success(f"Training & Experiment Suite complete. Best model: {results.get('best_model', 'N/A')}")
-    st.rerun()
+    if rerun:
+        st.rerun()
 
 
 def _run_forecasting(ticker, timeframe):
@@ -532,10 +455,152 @@ def _run_reporting(ticker, timeframe):
     st.success("Reports generated in reports/ directory")
 
 
+# ─── Sidebar ─────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.title("📊 CrowdWisdomTrading")
+    st.caption("X Sentiment Price Prediction")
+
+    # Asset selection
+    assets = get_all_assets()
+    asset_classes = {}
+    for a in assets:
+        cls = a["asset_class"].replace("_", " ").title()
+        if cls not in asset_classes:
+            asset_classes[cls] = []
+        asset_classes[cls].append(a)
+
+    selected_class = st.selectbox("Asset Class", list(asset_classes.keys()))
+    class_assets = asset_classes[selected_class]
+    asset_options = {f"{a['name']} ({a['ticker']})": a['ticker'] for a in class_assets}
+    selected_label = st.selectbox("Asset", list(asset_options.keys()))
+    selected_ticker = asset_options[selected_label]
+    asset_config = get_asset_by_ticker(selected_ticker)
+
+    # Timeframe
+    timeframe = st.selectbox("Timeframe", ["1d", "1h"], format_func=lambda x: "Daily" if x == "1d" else "Hourly")
+
+    # Settings
+    st.divider()
+    history_days = st.number_input("History (days)", 30, 365, HISTORY_DAYS)
+    transaction_cost = st.number_input("Transaction cost (bps)", 0, 100, TRANSACTION_COST_BPS)
+
+    # API & Provider Status
+    st.divider()
+    st.subheader("Provider & Auth Status")
+    st.caption("🟢 Binance: Public Price Feed")
+    st.caption("🟡 Yahoo Finance: Public Price Feed")
+
+    from src.ingestion.apify_client import verify_credentials as verify_apify
+    ap_stat = verify_apify()
+    if ap_stat["valid"]:
+        st.caption(f"✅ Apify X: Active (@{ap_stat.get('username')})")
+    elif ap_stat["configured"]:
+        st.caption(f"❌ Apify X: Auth Failed (401)")
+    else:
+        st.caption("⚠️ Apify X: Token Missing (.env)")
+
+    status = api_status()
+    st.caption(f"{'✅' if status['tavily'] else '⚠️'} Tavily News: {'Active' if status['tavily'] else 'Key Missing'}")
+    st.caption(f"{'✅' if status['exa'] else '⚠️'} Exa Neural: {'Active' if status['exa'] else 'Key Missing'}")
+
+    st.divider()
+    # Data Mode Badge
+    current_mode = get_data_mode()
+    if current_mode == "LIVE DATA":
+        st.success("Mode: 🟢 LIVE DATA")
+    elif current_mode == "HISTORICAL ARCHIVE":
+        st.warning("Mode: 🟡 HISTORICAL ARCHIVE")
+    elif current_mode == "PARTIAL DATA":
+        st.warning("Mode: 🟡 PARTIAL DATA")
+    elif current_mode == "DEMO DATA":
+        st.info("Mode: 🔵 DEMO DATA")
+    else:
+        st.caption("Mode: ⚪ NO DATA LOADED")
+
+    st.divider()
+
+    # Action buttons
+    if st.button("🔄 Start Ingestion", use_container_width=True):
+        _run_ingestion(selected_ticker, asset_config, timeframe, history_days)
+
+    if st.button("📦 Load Historical Benchmark", use_container_width=True):
+        _load_benchmark_data(selected_ticker, timeframe, transaction_cost)
+
+    if st.button("🧪 Use Demo Data", use_container_width=True):
+        _run_demo(selected_ticker, timeframe, history_days)
+
+    if st.button("🤖 Train & Validate", use_container_width=True):
+        _run_training(selected_ticker, timeframe, transaction_cost)
+
+    if st.button("📈 Generate Forecasts", use_container_width=True):
+        _run_forecasting(selected_ticker, timeframe)
+
+    if st.button("📄 Generate Reports", use_container_width=True):
+        _run_reporting(selected_ticker, timeframe)
+
+    st.divider()
+    with st.expander("📁 Historical X Importer (CSV/HF)"):
+        st.caption("Import genuine historical X posts for fair empirical evaluation.")
+        uploaded_csv = st.file_uploader("Upload X Posts CSV", type=["csv"], key="sidebar_csv")
+        if uploaded_csv is not None:
+            if st.button("📥 Process Uploaded CSV", use_container_width=True):
+                raw_text = uploaded_csv.getvalue().decode("utf-8", errors="ignore")
+                posts = import_historical_x_csv(raw_text, asset=selected_ticker, source_label="csv_import")
+                if not posts.empty:
+                    posts, _ = deduplicate_posts(posts)
+                    posts = validate_timestamps(posts)
+                    posts = filter_empty_text(posts)
+                    proc = process_posts_sentiment(posts, use_transformer=False)
+                    agg = aggregate_sentiment(proc, timeframe, selected_ticker)
+                    repo.save_raw_posts(posts)
+                    repo.save_processed_posts(proc)
+                    if not agg.empty:
+                        repo.save_sentiment_aggregates(agg)
+                    st.session_state.posts_df = posts
+                    st.session_state.processed_posts = proc
+                    st.session_state.sentiment_agg = agg
+                    st.session_state.data_source = "csv_historical"
+                    st.session_state.demo_mode = False
+                    st.success(f"Imported {len(posts)} genuine posts from CSV!")
+                    st.rerun()
+
+        hf_parquet = PROJECT_ROOT / "data" / "hf_sample.parquet"
+        if hf_parquet.exists():
+            if st.button("📦 Load StephanAkkerman Dataset (MIT)", use_container_width=True):
+                with st.spinner("Extracting asset posts and aligning prices..."):
+                    posts = extract_huggingface_posts(hf_parquet, asset=selected_ticker, max_posts=5000)
+                    if not posts.empty:
+                        from src.ingestion.price_providers import fetch_price_data
+                        t_min = str(posts["timestamp_utc"].min())[:10]
+                        t_max = str(posts["timestamp_utc"].max())[:10]
+                        p_df = fetch_price_data(asset_config, timeframe, start_date=t_min, end_date=t_max)
+                        if not p_df.empty:
+                            p_df = normalize_price_data(p_df)
+                            repo.save_price_bars(p_df)
+                            st.session_state.price_df = p_df
+                        posts, _ = deduplicate_posts(posts)
+                        posts = validate_timestamps(posts)
+                        proc = process_posts_sentiment(posts, use_transformer=False)
+                        agg = aggregate_sentiment(proc, timeframe, selected_ticker)
+                        repo.save_raw_posts(posts)
+                        repo.save_processed_posts(proc)
+                        if not agg.empty:
+                            repo.save_sentiment_aggregates(agg)
+                        st.session_state.posts_df = posts
+                        st.session_state.processed_posts = proc
+                        st.session_state.sentiment_agg = agg
+                        st.session_state.data_source = "huggingface"
+                        st.session_state.demo_mode = False
+                        st.success(f"Loaded {len(posts)} genuine posts aligned with price history!")
+                        st.rerun()
+
+
 # ─── Data Status Banner ──────────────────────────────────────────────────
 current_mode = get_data_mode()
 if current_mode == "LIVE DATA":
     st.success("🟢 **LIVE DATA MODE ACTIVE** — Verified live market prices and verified live X post collections.")
+elif current_mode == "HISTORICAL ARCHIVE":
+    st.warning("🟡 **HISTORICAL ARCHIVE BENCHMARK ACTIVE** — Evaluated on genuine historical price and X sentiment archive (Dec 2021 – Sep 2024). Not a live real-time nowcast.")
 elif current_mode == "PARTIAL DATA":
     source_name = st.session_state.price_df.get("source", pd.Series(["live"])).iloc[0] if not st.session_state.price_df.empty else "live"
     st.warning(
@@ -764,6 +829,11 @@ with tab2:
 with tab3:
     st.header("Forecast Matrix (n+0 through n+5)")
     forecasts = st.session_state.forecasts
+    if not forecasts:
+        db_fc = repo.get_latest_forecasts(selected_ticker, timeframe)
+        if not db_fc.empty:
+            forecasts = db_fc.to_dict("records")
+            st.session_state.forecasts = forecasts
 
     if not forecasts:
         st.info("No forecasts available. Run **Train & Validate** then **Generate Forecasts**.")
@@ -902,6 +972,9 @@ with tab4:
             "relative_mae_improvement_pct": "Rel. MAE Imprv (%)",
         }
         table_view = table_view.rename(columns=rename_map)
+        for col in ["Sharpe", "Sortino", "Val MAE"]:
+            if col in table_view.columns:
+                table_view[col] = table_view[col].apply(lambda v: "N/A" if pd.isna(v) or v is None else (f"{v:.4f}" if isinstance(v, (int, float)) else str(v)))
         st.dataframe(table_view, use_container_width=True, hide_index=True)
 
         # Visualizations across horizons
@@ -1003,12 +1076,17 @@ with tab5:
         sm = bt["strategy_metrics"]
         bm = bt.get("buyhold_metrics", {})
 
+        sharpe_val = sm.get('sharpe_ratio')
+        sortino_val = sm.get('sortino_ratio')
+        sharpe_str = "N/A (Cash)" if (sharpe_val is None or (isinstance(sharpe_val, (int, float)) and np.isnan(sharpe_val))) else f"{sharpe_val:.4f}"
+        sortino_str = "N/A (Cash)" if (sortino_val is None or (isinstance(sortino_val, (int, float)) and np.isnan(sortino_val))) else f"{sortino_val:.4f}"
+
         # Key metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Sharpe Ratio", f"{sm.get('sharpe_ratio', 0):.4f}")
+            st.metric("Sharpe Ratio", sharpe_str)
         with col2:
-            st.metric("Sortino Ratio", f"{sm.get('sortino_ratio', 0):.4f}")
+            st.metric("Sortino Ratio", sortino_str)
         with col3:
             st.metric("Max Drawdown", f"{sm.get('max_drawdown', 0)*100:.2f}%")
 
